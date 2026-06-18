@@ -3,11 +3,12 @@
  *
  * GET    /api/research/sessions       → list recent sessions
  * GET    /api/research/sessions/:id   → get one session (with data)
+ * DELETE /api/research/sessions/:id   → delete one session
  * POST   /api/research/sessions/:id/memo → add a memo note
  */
 
 import { readJsonBody, sendOk, sendError } from "../utils/async.js";
-import { listResearchSessions, getResearchSession, saveResearchSession } from "../repositories/researchSessions.js";
+import { listResearchSessions, getResearchSession, saveResearchSession, deleteResearchSession } from "../repositories/researchSessions.js";
 import { composeReport } from "../services/reportComposer.js";
 
 export async function handleSessionList(req, res) {
@@ -43,6 +44,17 @@ export async function handleSessionGet(req, res, id) {
     sendOk(res, { session, report });
   } catch (error) {
     sendError(res, 500, error.message || "获取研究会话失败");
+  }
+}
+
+export async function handleSessionDelete(req, res, id) {
+  try {
+    if (!id) { sendError(res, 400, "缺少 id"); return; }
+    const deleted = deleteResearchSession(id);
+    if (!deleted) { sendError(res, 404, "未找到研究会话"); return; }
+    sendOk(res, { deleted: true, sessionId: id });
+  } catch (error) {
+    sendError(res, 500, error.message || "删除研究会话失败");
   }
 }
 

@@ -29,7 +29,7 @@ import { handleStatusApi } from "./src/server/routes/status.js";
 import { handleDocumentParseApi, handleDocumentList, handleDocumentUpload, handleDocumentGet, handleDocumentDelete } from "./src/server/routes/documents.js";
 import { handleCompanySearch, handleCompanyByTicker, handleCompanyHealth } from "./src/server/routes/companies.js";
 import { handleWatchlistList, handleWatchlistAdd, handleWatchlistGet, handleWatchlistUpdate, handleWatchlistDelete } from "./src/server/routes/watchlist.js";
-import { handleSessionList, handleSessionGet, handleSessionMemo } from "./src/server/routes/research.js";
+import { handleSessionList, handleSessionGet, handleSessionDelete, handleSessionMemo } from "./src/server/routes/research.js";
 import { handleChatApi } from "./src/server/routes/chat.js";
 import { handleReportGenerateApi } from "./src/server/routes/reports.js";
 
@@ -173,6 +173,10 @@ const server = createServer(async (req, res) => {
   if (method === "GET" && /^\/api\/research\/sessions\/[^/]+$/.test(url.split("?")[0])) {
     const id = url.replace("/api/research/sessions/", "").split("?")[0];
     return handleSessionGet(req, res, id);
+  }
+  if (method === "DELETE" && /^\/api\/research\/sessions\/[^/]+$/.test(url.split("?")[0])) {
+    const id = url.replace("/api/research/sessions/", "").split("?")[0];
+    return handleSessionDelete(req, res, id);
   }
   if (method === "POST" && /^\/api\/research\/sessions\/[^/]+\/memo$/.test(url.split("?")[0])) {
     const id = url.split("?")[0].match(/\/api\/research\/sessions\/([^/]+)\/memo/)?.[1] || "";

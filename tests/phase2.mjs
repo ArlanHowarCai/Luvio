@@ -9,7 +9,7 @@ import { searchCompanies, getCompanyByTickerComplete, getLatestMarketSnapshot } 
 import { addWatchlistItem, listWatchlist, getWatchlistItem, updateWatchlistItem, deleteWatchlistItem, getWatchlistSummary } from "../src/server/repositories/watchlistRepository.js";
 import { addDocument, getDocuments, getDocument, deleteDocument } from "../src/server/repositories/documentRepository.js";
 import { composeReport, reportPreview } from "../src/server/services/reportComposer.js";
-import { saveResearchSession, getResearchSession } from "../src/server/repositories/researchSessions.js";
+import { saveResearchSession, getResearchSession, deleteResearchSession } from "../src/server/repositories/researchSessions.js";
 
 let pass = 0;
 let fail = 0;
@@ -226,6 +226,21 @@ it("saveResearchSession with full decision_panel persists and retrieves", () => 
   assert.deepEqual(fetched.decisionPanel, { researchStatus: "watch", confidence: "中", keyDrivers: [] });
   assert.equal(fetched.fullResearch, "full markdown");
   assert.deepEqual(fetched.dataSources, { market: { status: "ok" }, news: { status: "missing" } });
+});
+
+it("deleteResearchSession removes one saved session", () => {
+  const id = `test_delete_${Date.now()}`;
+  saveResearchSession({
+    id,
+    ticker: "0700.HK",
+    question: "delete me",
+    decisionPanel: { researchStatus: "watch", confidence: "中", keyDrivers: [] },
+    fullResearch: "temporary session"
+  });
+  assert.ok(getResearchSession(id));
+  assert.equal(deleteResearchSession(id), true);
+  assert.equal(getResearchSession(id), null);
+  assert.equal(deleteResearchSession(id), false);
 });
 
 console.log(`\nResults: ${pass} passed, ${fail} failed.`);

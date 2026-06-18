@@ -146,6 +146,13 @@ export function listResearchSessions({ limit = 20, ticker } = {}) {
   return rows;
 }
 
+export function deleteResearchSession(id) {
+  ensureColumns();
+  const db = getDb();
+  const result = db.prepare("DELETE FROM research_sessions WHERE id = ?").run(id);
+  return result.changes > 0;
+}
+
 function safeParse(value) {
   try {
     return JSON.parse(value);

@@ -352,6 +352,30 @@ async function loadSession(id) {
   }
 }
 
+async function deleteSession(id) {
+  if (!id || isBusy) return;
+  const item = recentSessions.find((session) => session.id === id);
+  const title = item?.title || item?.question || "这条研究";
+  const ok = window.confirm(`删除“${title}”？\n\n这会从本地 SQLite 里移除这条历史研究。`);
+  if (!ok) return;
+  try {
+    await api(`/api/research/sessions/${encodeURIComponent(id)}`, { method: "DELETE" });
+    if (getSessionId() === id) {
+      stopBusy();
+      setThread([]);
+      setPanel(null);
+      setCompany(null);
+      setDocuments([]);
+      setSessionId(null);
+    }
+    await refreshSessions();
+    toast("已删除历史研究。");
+    render();
+  } catch (error) {
+    toast(error.message || "删除失败。");
+  }
+}
+
 async function sendChat(question) {
   let company = getCompany();
   const shouldResolve = !company || extractTicker(question) || extractAliasTicker(question);
@@ -541,10 +565,13 @@ function renderSessionItem(session, activeSessionId) {
   const title = session.title || session.question || session.companyName || session.ticker || "未命名研究";
   const company = session.companyName || session.company_name || session.ticker || "研究对象";
   const turns = session.turnCount || session.turn_count || 1;
-  return `<button class="session-item ${active ? "is-active" : ""}" type="button" data-action="load-session" data-id="${esc(session.id)}">
-    <strong>${esc(title)}</strong>
-    <span>${esc(company)} · ${turns} 轮 · ${esc(formatSessionTime(session.updated_at || session.updatedAt))}</span>
-  </button>`;
+  return `<div class="session-item ${active ? "is-active" : ""}">
+    <button class="session-open" type="button" data-action="load-session" data-id="${esc(session.id)}">
+      <strong>${esc(title)}</strong>
+      <span>${esc(company)} · ${turns} 轮 · ${esc(formatSessionTime(session.updated_at || session.updatedAt))}</span>
+    </button>
+    <button class="session-delete" type="button" data-action="delete-session" data-id="${esc(session.id)}" aria-label="删除历史研究">×</button>
+  </div>`;
 }
 
 function formatSessionTime(value) {
@@ -685,6 +712,7 @@ document.addEventListener("click", async (event) => {
   const action = target.dataset.action;
   if (action === "new") clearResearch();
   if (action === "load-session") await loadSession(target.dataset.id);
+  if (action === "delete-session") await deleteSession(target.dataset.id);
   if (action === "settings") location.hash = "#/settings";
   if (action === "quick") {
     const input = document.querySelector(".composer textarea");
