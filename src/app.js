@@ -71,12 +71,23 @@ function toast(message) {
   toastNode.timer = setTimeout(() => toastNode.classList.remove("is-visible"), 2200);
 }
 
+function normalizeMessage(message) {
+  return {
+    ...message,
+    id: message.id || uid("msg")
+  };
+}
+
 function getThread() {
-  return readStore(storeKeys.thread, []);
+  const thread = readStore(storeKeys.thread, []);
+  if (!Array.isArray(thread)) return [];
+  const normalized = thread.map(normalizeMessage);
+  if (thread.some((message) => !message?.id)) writeStore(storeKeys.thread, normalized);
+  return normalized;
 }
 
 function setThread(thread) {
-  writeStore(storeKeys.thread, thread.slice(-80));
+  writeStore(storeKeys.thread, thread.slice(-80).map(normalizeMessage));
 }
 
 function getCompany() {
@@ -281,6 +292,25 @@ function appendMessage(role, content, meta = {}) {
     document.querySelector(".conversation")?.scrollTo({ top: 999999, behavior: "smooth" });
     document.querySelector(".message:last-child")?.scrollIntoView({ behavior: "smooth", block: "end" });
   });
+}
+
+async function copyMessage(id) {
+  const message = getThread().find((item) => item.id === id);
+  if (!message?.content) return;
+  try {
+    await navigator.clipboard.writeText(message.content);
+  } catch {
+    const textarea = document.createElement("textarea");
+    textarea.value = message.content;
+    textarea.setAttribute("readonly", "");
+    textarea.style.position = "fixed";
+    textarea.style.opacity = "0";
+    document.body.appendChild(textarea);
+    textarea.select();
+    document.execCommand("copy");
+    textarea.remove();
+  }
+  toast("已复制回答。");
 }
 
 function clearResearch() {
@@ -596,8 +626,8 @@ function renderComposer(company) {
       <div class="composer-footer">
         <div class="composer-left-tools">
           <label class="tool-chip icon-chip file-label" title="上传资料">+<input type="file" name="documents" multiple accept=".pdf,.txt,.md,.csv,.json,image/*"></label>
+          <button class="tool-chip" type="button" data-action="quick" data-query="它主要靠什么赚钱？">赚钱方式</button>
           <button class="tool-chip" type="button" data-action="quick" data-query="经营质量怎么样？">经营质量</button>
-          <button class="tool-chip" type="button" data-action="quick" data-query="估值压力在哪里？">估值压力</button>
           <button class="tool-chip" type="button" data-action="quick" data-query="什么情况会证伪？">证伪条件</button>
           <button class="tool-chip emphasis" type="button" data-action="report" ${company ? "" : "disabled"}>深度研究</button>
         </div>
@@ -619,9 +649,13 @@ function renderEmptyState() {
 function renderMessage(message) {
   if (message.role === "assistant") {
     const title = message.meta?.type === "deep_research" ? "DEEP RESEARCH" : "LUVIO";
+    const messageId = message.id || "";
     return `<article class="message assistant">
       <div class="bubble answer-card">
-        <div class="answer-brand"><i></i><span>${title}</span></div>
+        <div class="answer-brand">
+          <div class="answer-mark"><i></i><span>${title}</span></div>
+          <button class="copy-answer" type="button" data-action="copy-message" data-id="${esc(messageId)}">复制</button>
+        </div>
         ${markdownToHtml(message.content)}
       </div>
     </article>`;
@@ -704,6 +738,7 @@ document.addEventListener("click", async (event) => {
       input.focus();
     }
   }
+  if (action === "copy-message") await copyMessage(target.dataset.id);
   if (action === "report") await generateDeepResearch();
 });
 

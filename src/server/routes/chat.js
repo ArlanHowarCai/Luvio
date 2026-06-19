@@ -128,6 +128,50 @@ function isMoatQuestion(question = "") {
   return /护城河|竞争优势|壁垒|不可替代|垄断|网络效应|优势在哪|优势是什么/.test(String(question));
 }
 
+function isBusinessModelQuestion(question = "") {
+  return /靠什么赚钱|怎么赚钱|如何赚钱|盈利模式|商业模式|收入来源|主要收入|利润来源|赚的是什么钱|谁付钱|变现方式/.test(String(question));
+}
+
+function businessModelReplyFromPanel(panel, question = "", dataSources = {}) {
+  const profile = companyByTicker(panel?.ticker) || {};
+  const name = panel?.companyName || profile.nameZh || panel?.ticker || "这家公司";
+  const rawBusiness = Array.isArray(profile.businessModel) ? profile.businessModel : [];
+  const shareholderReturns = rawBusiness.filter((item) => /回购|分红|每股价值|股东回报/.test(String(item)));
+  const business = rawBusiness.filter((item) => !/回购|分红|每股价值|股东回报/.test(String(item)));
+  const cleanSentence = (value) => String(value).replace(/[。；;]$/g, "");
+  const businessLines = business.length
+    ? business
+    : ["核心收入来源还需要用最新财报拆分，但可以先从主业收入、利润率和现金流判断。"];
+  const metrics = Array.isArray(profile.metrics) ? profile.metrics : [];
+  const risks = Array.isArray(profile.risks) ? profile.risks : [];
+  const sources = sourceLines(panel, dataSources);
+  const qualityLine = metrics.length
+    ? metrics.slice(0, 4).map((m) => `${m[0]}：${m[1]}，${m[2] || "待验证"}`).join("；")
+    : "还缺完整财报三表，暂时不能精确拆收入和利润占比。";
+  const riskLine = risks.length
+    ? risks.slice(0, 4).map(cleanSentence).join("、")
+    : "竞争、监管、利润率和现金流波动";
+
+  return [
+    `北京时间 ${formatBeijingMinute()}，${name} 靠什么赚钱，核心不是一句“做平台”，而是看哪些业务真正贡献高质量利润。`,
+    "",
+    "简单说",
+    `${name} 的经营赚钱机制主要来自：${businessLines.map(cleanSentence).join("；")}。`,
+    "",
+    "拆开看",
+    ...businessLines.slice(0, 4).map((item, index) => `${index + 1}. ${cleanSentence(item)}。这部分要继续看收入增速、毛利率和现金流质量。`),
+    "",
+    "关键判断",
+    `真正值钱的是高毛利、低边际成本、可持续复购或高留存的利润池。当前可用画像显示：${qualityLine}。所以不能只问“有没有收入”，还要问这些收入是不是能稳定变成自由现金流。${shareholderReturns.length ? `另外，${shareholderReturns.map(cleanSentence).join("、")}是股东回报机制，不是经营收入来源。` : ""}`,
+    "",
+    "主要风险",
+    `${riskLine}会影响它赚钱的稳定性。如果这些风险开始压低利润率或现金流，商业模式看起来再好，也会被市场重新定价。`,
+    "",
+    "来源：",
+    ...sources
+  ].join("\n");
+}
+
 function moatReplyFromPanel(panel, question = "", dataSources = {}) {
   const profile = companyByTicker(panel?.ticker);
   const name = panel?.companyName || profile?.nameZh || panel?.ticker || "这家公司";
@@ -169,6 +213,7 @@ function moatReplyFromPanel(panel, question = "", dataSources = {}) {
 
 function researchReplyFromPanel(panel, question = "", dataSources = {}) {
   if (!panel) return "我还没有拿到足够上下文。先告诉我公司名称或港股代码，我会先做阶段判断。";
+  if (isBusinessModelQuestion(question)) return businessModelReplyFromPanel(panel, question, dataSources);
   if (isMoatQuestion(question)) return moatReplyFromPanel(panel, question, dataSources);
 
   const status = RESEARCH_STATUS_LABELS[panel.researchStatus] || panel.researchStatus || "待判断";
@@ -256,7 +301,7 @@ export async function handleChatApi(req, res) {
     const fallback = researchReplyFromPanel(result.decisionPanel, payload.question || "", result.dataSources);
     let content = fallback;
     let chatModel = null;
-    if (getProviderStatus().configured && result.decisionPanel && !isMoatQuestion(payload.question || "")) {
+    if (getProviderStatus().configured && result.decisionPanel && !isMoatQuestion(payload.question || "") && !isBusinessModelQuestion(payload.question || "")) {
       chatModel = await withTimeout(callModel({
         system: "你是 Luvio 的港股研究助理，风格像资深买方研究员：直接、克制、可证伪。普通对话也要给高质量判断，但不要伪装成完整正式报告，不给买卖指令。即使公开数据不完整，也必须基于公司档案、商业模式、行业常识、当前可得行情/财务/公告和模型推理给阶段判断；缺数据只影响置信度，不能只回答“需要接入数据”。",
         user: buildChatPrompt(payload.question || "", result.decisionPanel, result.dataSources)
@@ -348,6 +393,7 @@ function buildChatPrompt(question, panel, dataSources = {}) {
   const bear = profile?.bear?.join("；") || "本地档案暂缺";
   const monitors = profile?.monitors?.join("、") || "收入增速、利润率、自由现金流、回购/分红";
   const moatMode = isMoatQuestion(question);
+  const businessMode = isBusinessModelQuestion(question);
   return `用户问题：${question}
 
 当前研究对象：${panel.companyName}（${panel.ticker}）
@@ -377,7 +423,7 @@ ${sources}
 - 输出中文纯文本，可以用短标题，但不要 Markdown 表格。
 - 第一行必须严格使用：北京时间 ${formatBeijingMinute()}，${panel.companyName} 最近的状态是：……
 - 保持像真实投研对话，不要写成产品说明，不要说“我将/我会获取”。
-- ${moatMode ? "用户问的是护城河/竞争优势。只围绕护城河回答，段落用：结论、护城河拆解、商业模式、我的判断、风险 / 证伪、下一步看什么、来源。不要输出完整行情模板。" : "必须包含这些段落，顺序固定：结论、事实、推断、估值 / 风险、动作、数据缺口、证伪条件、我的判断、来源。"}
+- ${businessMode ? "用户问的是靠什么赚钱/商业模式/收入来源。只回答这个问题，段落用：简单说、拆开看、关键判断、主要风险、来源。不要输出完整研究模板。" : moatMode ? "用户问的是护城河/竞争优势。只围绕护城河回答，段落用：结论、护城河拆解、商业模式、我的判断、风险 / 证伪、下一步看什么、来源。不要输出完整行情模板。" : "必须包含这些段落，顺序固定：结论、事实、推断、估值 / 风险、动作、数据缺口、证伪条件、我的判断、来源。"}
 - “事实”尽量编号，引用当前可用数据；不能编造具体数值。若某项缺失，写“当前未核到/来源缺失”，但继续给推断。
 - 不要使用“暂不评分”“完整度xx%”“需要补充材料”这种产品状态词，改成研究语言：当前未核到、置信度下降、后台应接入某类源。
 - “数据缺口”必须说清楚还缺什么事实，以及产品后台该补什么数据源，例如财报三表、HKEX 公告、公司 IR、web 搜索证据、一致预期。

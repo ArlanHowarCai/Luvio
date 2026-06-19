@@ -410,22 +410,65 @@ button:disabled {
 .answer-brand {
   display: flex;
   align-items: center;
-  gap: 9px;
+  justify-content: space-between;
+  gap: 14px;
   margin-bottom: 14px;
 }
 
-.answer-brand i {
+.answer-mark {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+
+.answer-mark i {
   width: 8px;
   height: 8px;
+  flex: 0 0 auto;
   border-radius: 999px;
   background: var(--orange);
 }
 
-.answer-brand span {
+.answer-mark span {
   color: #687083;
   font-size: 13px;
   font-weight: 850;
   letter-spacing: 0.12em;
+}
+
+.copy-answer {
+  min-height: 28px;
+  padding: 5px 10px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  color: #6f7787;
+  background: #f6f7f9;
+  font-size: 12px;
+  font-weight: 750;
+  cursor: pointer;
+  opacity: 0;
+  transform: translateY(-1px);
+  transition: opacity 0.16s ease, transform 0.16s ease, color 0.16s ease, background 0.16s ease, border-color 0.16s ease;
+}
+
+.answer-card:hover .copy-answer,
+.copy-answer:focus-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.copy-answer:hover {
+  color: #111827;
+  background: #fff;
+  border-color: rgba(29, 29, 31, 0.12);
+}
+
+@media (hover: none) {
+  .copy-answer {
+    opacity: 1;
+    transform: none;
+  }
 }
 
 .wait-card {
