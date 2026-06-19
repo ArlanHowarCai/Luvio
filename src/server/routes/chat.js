@@ -44,11 +44,11 @@ function backendGapLines(panel, dataSources = {}) {
   const filingsMissing = dataSources.filings?.status !== "ok" || [...missing].some((item) => /公告|回购|分红|年报|中报/.test(item));
   const newsMissing = dataSources.news?.status !== "ok" || [...missing].some((item) => /新闻|舆情|监管/.test(item));
   const estimatesMissing = dataSources.estimates?.status !== "ok" || [...missing].some((item) => /一致预期|评级|目标价/.test(item));
-  if (financialMissing) gaps.push("财报三表、利润率、自由现金流和估值倍数：后台接 FMP / EODHD / Finnhub，并缓存到 financial_snapshots。");
-  if (filingsMissing) gaps.push("年报、中报、业绩公告、回购和分红公告：后台接 HKEXnews 和公司 IR，并解析 PDF。");
-  if (newsMissing) gaps.push("近期新闻、监管和行业事件：后台接 web 搜索证据层，只保留公司 IR、HKEX、主流财经媒体等可信来源。");
-  if (estimatesMissing) gaps.push("一致预期、目标价和盈利预测：后台接 Finnhub / FMP / EODHD 的 analyst estimates。");
-  return gaps.length ? gaps : ["当前关键数据源基本可用，下一步主要是提高来源覆盖和交叉校验。"];
+  if (financialMissing) gaps.push("还缺完整财报三表、利润率、自由现金流和估值倍数；产品后台应接 FMP / EODHD / Finnhub，并缓存到 financial_snapshots。");
+  if (filingsMissing) gaps.push("还缺最近年报、中报、业绩公告、回购和分红公告；产品后台应接 HKEXnews 和公司 IR，并解析 PDF。");
+  if (newsMissing) gaps.push("还缺近期新闻、监管和行业事件的可信证据；产品后台应接 web 搜索证据层，只保留公司 IR、HKEX、主流财经媒体等来源。");
+  if (estimatesMissing) gaps.push("还缺一致预期、目标价和盈利预测；产品后台应接 Finnhub / FMP / EODHD 的 analyst estimates。");
+  return gaps.length ? gaps : ["关键数据源基本可用，下一步要提高来源覆盖和交叉校验。"];
 }
 
 function sentenceJoin(items = [], fallback = "") {
@@ -90,16 +90,16 @@ function buildInferenceSection({ panel, question, dataSources }) {
   const financialGap = dataSources.financials?.status !== "ok";
   const filingsGap = dataSources.filings?.status !== "ok";
   const gapText = financialGap || filingsGap
-    ? "本轮财报三表或公告口径还没补齐，所以我不能把这个推断写成确定结论；但商业逻辑本身仍然可以先判断。"
+    ? "本轮财报三表或公告口径还没补齐，所以这个推断不能写成确定结论；但商业逻辑本身仍然可以先判断。"
     : "这轮数据源能支撑更强判断，下一步是把结论和最新财报逐项对齐。";
 
   return [
-    `${name} 的判断不能停在“数据不足”。我会先按商业逻辑做推断，再用财报和公告去验证。`,
+    `${name} 的判断不能停在“数据不足”。先按商业逻辑做推断，再用财报和公告去验证。`,
     `第一层是赚钱机制：${business}${questionHint}`,
     `第二层是护城河：${moat}护城河真正有价值的地方，不是听起来强，而是能不能带来更低获客成本、更高留存、更稳利润率和更强自由现金流。`,
-    metrics ? `第三层是财务兑现：${metrics}如果这些指标不能同步改善，商业模式再好也会变成估值故事。` : `第三层是财务兑现：目前缺少完整三表，我会先看收入质量、利润率、自由现金流和回购/分红四个方向。`,
+    metrics ? `第三层是财务兑现：${metrics}如果这些指标不能同步改善，商业模式再好也会变成估值故事。` : `第三层是财务兑现：目前缺少完整三表，先看收入质量、利润率、自由现金流和回购/分红四个方向。`,
     `第四层是重估变量：市场愿不愿意给它更高估值，取决于增长叙事是否重新成立，以及利润和现金流能否证明投入不是无底洞。${risks}`,
-    `${gapText} 换句话说，现在最有价值的不是给一个硬结论，而是把“什么会让逻辑变好/变坏”先讲清楚。`
+    `${gapText} 换句话说，现在最有价值的不是硬给结论，而是把“什么会让逻辑变好/变坏”先讲清楚。`
   ].join("\n\n");
 }
 
@@ -229,7 +229,7 @@ function researchReplyFromPanel(panel, question = "", dataSources = {}) {
     "2. 如果有持仓，记录成本、股数、可承受回撤和计划周期，避免只按股价波动做判断。",
     "3. 如果需要更完整的材料，点击输入框里的“深度研究”，系统会把本轮对话、来源和证据缺口直接补进当前对话流。",
     "",
-    "还缺什么",
+    "数据缺口",
     ...backendGapLines(panel, dataSources).map((line, index) => `${index + 1}. ${line}`),
     "",
     "证伪条件",
@@ -377,10 +377,10 @@ ${sources}
 - 输出中文纯文本，可以用短标题，但不要 Markdown 表格。
 - 第一行必须严格使用：北京时间 ${formatBeijingMinute()}，${panel.companyName} 最近的状态是：……
 - 保持像真实投研对话，不要写成产品说明，不要说“我将/我会获取”。
-- ${moatMode ? "用户问的是护城河/竞争优势。只围绕护城河回答，段落用：结论、护城河拆解、商业模式、我的判断、风险 / 证伪、下一步看什么、来源。不要输出完整行情模板。" : "必须包含这些段落，顺序固定：结论、事实、推断、估值 / 风险、动作、还缺什么、证伪条件、我的判断、来源。"}
+- ${moatMode ? "用户问的是护城河/竞争优势。只围绕护城河回答，段落用：结论、护城河拆解、商业模式、我的判断、风险 / 证伪、下一步看什么、来源。不要输出完整行情模板。" : "必须包含这些段落，顺序固定：结论、事实、推断、估值 / 风险、动作、数据缺口、证伪条件、我的判断、来源。"}
 - “事实”尽量编号，引用当前可用数据；不能编造具体数值。若某项缺失，写“当前未核到/来源缺失”，但继续给推断。
 - 不要使用“暂不评分”“完整度xx%”“需要补充材料”这种产品状态词，改成研究语言：当前未核到、置信度下降、后台应接入某类源。
-- “还缺什么”必须说清楚后台该补什么数据源，例如财报三表、HKEX 公告、公司 IR、web 搜索证据、一致预期。
+- “数据缺口”必须说清楚还缺什么事实，以及产品后台该补什么数据源，例如财报三表、HKEX 公告、公司 IR、web 搜索证据、一致预期。
 - “推断”必须是全回答的信息密度最高部分，不能少于 4 个自然段；必须依次讲：赚钱机制、护城河是否能转成利润、财务兑现路径、估值重估变量。必须使用上面的本地公司档案，不能只写“第一层/第二层”的空框架。
 - 对“赚不赚钱”，必须先回答赚钱机制和盈利质量：是否有收入来源、利润是否稳定、现金流是否支撑。
 - 不允许只说数据不足；数据不足只能作为置信度和证伪条件的一部分。

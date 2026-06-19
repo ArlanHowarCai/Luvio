@@ -17,6 +17,12 @@ export function handleStatusApi(req, res) {
       { id: "news", name: "新闻舆情", status: hasNews ? "ok" : "limited", detail: hasNews ? "Yahoo RSS + Bing + 东方财富" : "Yahoo RSS + Bing + 东方财富（国内可用）" },
       { id: "filings", name: "公告数据", status: "limited", detail: "HKEX 网页解析（Beta）" }
     ],
+    evidenceBacklog: [
+      { id: "financial_snapshots", label: "财报三表与估值倍数", priority: "P0", providers: ["FMP", "EODHD", "Finnhub"] },
+      { id: "hkex_filings", label: "HKEX 公告与公司 IR PDF", priority: "P0", providers: ["HKEXnews", "Company IR"] },
+      { id: "web_evidence", label: "可信 web 搜索证据层", priority: "P1", providers: ["Bing Search", "SerpAPI"] },
+      { id: "analyst_estimates", label: "一致预期与目标价", priority: "P1", providers: ["Finnhub", "FMP", "EODHD"] }
+    ],
     ai: aiStatus,
     db: { companies: "654+" },
     updatedAt: new Date().toISOString()

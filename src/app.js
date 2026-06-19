@@ -9,14 +9,6 @@ const storeKeys = {
   sessionId: "luvio.v3.sessionId"
 };
 
-const statusLabels = {
-  watch: "持续观察",
-  research_more: "需要补充材料",
-  data_missing: "数据不足",
-  risk_alert: "风险提示",
-  out_of_scope: "不在研究范围"
-};
-
 const companyAliases = [
   { pattern: /腾讯控股|腾讯|Tencent/i, ticker: "0700.HK" },
   { pattern: /阿里巴巴|阿里(?!健康|影业)|Alibaba|BABA/i, ticker: "9988.HK" },
@@ -120,16 +112,6 @@ function setSessionId(id) {
   else clearStore(storeKeys.sessionId);
 }
 
-function statusLabel(status) {
-  return statusLabels[status] || status || "等待研究";
-}
-
-function sourceHealth(panel) {
-  const connected = panel?.connectedData || [];
-  const missing = panel?.missingData || [];
-  return { connected, missing, completeness: Number(panel?.dataCompleteness || 0) };
-}
-
 function busyElapsedSeconds() {
   if (!busyStartedAt) return 0;
   return Math.max(0, Math.floor((Date.now() - busyStartedAt) / 1000));
@@ -182,7 +164,7 @@ function markdownToHtml(markdown = "") {
   const lines = String(markdown).split(/\r?\n/);
   const html = [];
   let inList = false;
-  const sectionTitle = /^(结论|事实|推断|估值\s*\/\s*风险|动作|还缺什么|证伪条件|我的判断|来源|深度研究)$/;
+  const sectionTitle = /^(结论|事实|推断|估值\s*\/\s*风险|动作|数据缺口|证伪条件|我的判断|来源|深度研究)$/;
 
   for (const raw of lines) {
     const line = raw.trim();
@@ -528,7 +510,6 @@ function renderResearch() {
   const company = getCompany();
   const panel = getPanel();
   const thread = getThread();
-  const health = sourceHealth(panel);
   const activeSessionId = getSessionId();
 
   shell(`
@@ -546,16 +527,16 @@ function renderResearch() {
       <section class="desk">
         <div class="desk-head">
           <div>
-            <p>研究室</p>
-            <h1>${company ? `${esc(company.nameZh)} ${esc(company.ticker)}` : "一个对话流完成研究"}</h1>
-            <span>${company ? esc(company.industry || company.sector || "资料待补齐") : "普通追问、深度研究、资料上传都在同一个上下文里完成"}</span>
+            <p>Luvio Research</p>
+            <h1>${company ? `${esc(company.nameZh)} ${esc(company.ticker)}` : "输入公司，开始判断"}</h1>
+            <span>${company ? esc(company.industry || company.sector || "待补充") : "问一句就开始，复杂研究再沉到底层。"} </span>
           </div>
         </div>
         <div class="conversation">
           ${thread.length ? thread.map(renderMessage).join("") : renderEmptyState()}
           ${isBusy ? renderWaitingCard() : ""}
         </div>
-        ${renderComposer(company, health)}
+        ${renderComposer(company)}
       </section>
     </section>`);
 }
@@ -588,21 +569,6 @@ function renderSessionItem(session, activeSessionId) {
   </div>`;
 }
 
-function formatSessionTime(value) {
-  if (!value) return "刚刚";
-  const normalized = String(value).includes("T") ? String(value) : `${String(value).replace(" ", "T")}Z`;
-  const date = new Date(normalized);
-  if (Number.isNaN(date.getTime())) return String(value).slice(0, 16);
-  return new Intl.DateTimeFormat("zh-CN", {
-    timeZone: "Asia/Shanghai",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false
-  }).format(date);
-}
-
 function renderWaitingCard() {
   return `<div class="message assistant">
     <div class="bubble answer-card loading wait-card">
@@ -617,24 +583,25 @@ function renderWaitingCard() {
   </div>`;
 }
 
-function renderComposer(company, health) {
+function renderComposer(company) {
   const status = isBusy
     ? `${esc(busyLabel)} · 已等待 <b data-busy-seconds>${busyElapsedSeconds()}</b>s`
     : company
-      ? `${esc(company.ticker)} · ${health.connected.length} 项数据已接入`
+      ? `${esc(company.nameZh || company.ticker)} · ${esc(company.ticker)}`
       : "先输入公司名或港股代码";
   return `<form class="composer" data-form="chat">
     <div class="composer-panel">
-      <textarea name="query" rows="2" maxlength="1200" placeholder="继续追问这家公司，例如：护城河是什么？利润能不能持续？"></textarea>
+      <textarea name="query" rows="2" maxlength="1200" placeholder="${company ? "继续追问：利润、护城河、估值或证伪条件" : "输入公司名或代码，例如：阿里巴巴最近怎么样？"}"></textarea>
       <div class="composer-footer">
         <div class="composer-left-tools">
-          <label class="tool-chip file-label">上传资料<input type="file" name="documents" multiple accept=".pdf,.txt,.md,.csv,.json,image/*"></label>
-          <button class="tool-chip" type="button" data-action="quick" data-query="这家公司赚不赚钱？">赚不赚钱</button>
-          <button class="tool-chip" type="button" data-action="quick" data-query="主要风险是什么？">主要风险</button>
+          <label class="tool-chip icon-chip file-label" title="上传资料">+<input type="file" name="documents" multiple accept=".pdf,.txt,.md,.csv,.json,image/*"></label>
+          <button class="tool-chip" type="button" data-action="quick" data-query="经营质量怎么样？">经营质量</button>
+          <button class="tool-chip" type="button" data-action="quick" data-query="估值压力在哪里？">估值压力</button>
+          <button class="tool-chip" type="button" data-action="quick" data-query="什么情况会证伪？">证伪条件</button>
           <button class="tool-chip emphasis" type="button" data-action="report" ${company ? "" : "disabled"}>深度研究</button>
         </div>
         <div class="composer-status">${status}</div>
-        <button class="send-button" type="submit" aria-label="发送">⌃</button>
+        <button class="send-button" type="submit" aria-label="发送">↑</button>
       </div>
     </div>
   </form>`;
@@ -642,13 +609,9 @@ function renderComposer(company, health) {
 
 function renderEmptyState() {
   return `<div class="empty-chat">
-    <h2>先聊，不拆系统。</h2>
-    <p>你可以连续追问同一家公司；需要更长的输出时点“深度研究”，结果也会直接回到这条对话流里。</p>
-    <div class="prompt-row">
-      <button data-action="quick" data-query="分析 0700.HK 腾讯怎么样">分析腾讯</button>
-      <button data-action="quick" data-query="阿里巴巴最近怎么样？">阿里巴巴</button>
-      <button data-action="quick" data-query="帮我看 1316.HK 耐世特是不是值得长期研究。我成本价 4.9，持有 3000 股。">耐世特持仓</button>
-    </div>
+    <p>OPEN FINANCIAL CONSOLE</p>
+    <h2>问一家公司。</h2>
+    <span>普通问题直接回答；需要完整证据链时，再生成深度研究。</span>
   </div>`;
 }
 
@@ -670,6 +633,7 @@ function renderMessage(message) {
 function renderSettings() {
   const sources = apiStatus?.sources || [];
   const providers = apiStatus?.ai?.providers || [];
+  const backlog = apiStatus?.evidenceBacklog || [];
   shell(`<section class="simple-page settings-page">
     <div class="page-head"><p class="eyebrow">Settings</p><h1>后台设置与状态</h1><span>模型、数据源、隐藏功能都放在这里，不打扰研究主流程。</span></div>
     <div class="settings-grid">
@@ -689,6 +653,9 @@ function renderSettings() {
         <div class="setting-row"><span>财报数学</span><strong>FMP / EODHD / Finnhub</strong></div>
         <div class="setting-row"><span>公开证据</span><strong>HKEX + Web Search</strong></div>
         <a class="doc-link" href="/docs/DATA_SOURCE_STRATEGY.md" target="_blank" rel="noopener noreferrer">查看接入策略</a>
+      </article>
+      <article class="settings-card"><h2>补源队列</h2>
+        ${backlog.map((item) => `<div class="setting-row"><span>${esc(item.label)}</span><strong>${esc(item.priority)} · ${esc((item.providers || []).join(" / "))}</strong></div>`).join("") || `<p>暂无补源队列。</p>`}
       </article>
     </div>
   </section>`);
