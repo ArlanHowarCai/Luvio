@@ -175,7 +175,7 @@ function markdownToHtml(markdown = "") {
   const lines = String(markdown).split(/\r?\n/);
   const html = [];
   let inList = false;
-  const sectionTitle = /^(结论|事实|推断|估值\s*\/\s*风险|动作|数据缺口|证伪条件|我的判断|来源|深度研究)$/;
+  const sectionTitle = /^(简单说|简单结论|拆开看|关键判断|主要风险|主要竞争对手|怎么理解竞争格局|接下来重点看|已抓到的外部信号|结论|事实|推断|估值\s*\/\s*风险|动作|数据缺口|证据缺口|证伪条件|我的判断|来源|深度研究)$/;
 
   for (const raw of lines) {
     const line = raw.trim();
@@ -601,6 +601,8 @@ function renderSessionItem(session, activeSessionId) {
 }
 
 function renderWaitingCard() {
+  const steps = ["生成检索任务", "检索公开资料", "筛选可信来源", "综合研究判断"];
+  const activeStep = Math.min(steps.length - 1, Math.floor(busyElapsedSeconds() / 4));
   return `<div class="message assistant">
     <div class="bubble answer-card loading wait-card">
       <div class="answer-brand"><i></i><span>LUVIO</span></div>
@@ -609,7 +611,10 @@ function renderWaitingCard() {
         <strong>${esc(busyLabel)}</strong>
         <em>已等待 <span data-busy-seconds>${busyElapsedSeconds()}</span>s</em>
       </div>
-      <p>正在核对数据、推理和证据缺口。长回答会慢一点，但不会让你盲等。</p>
+      <div class="wait-steps">
+        ${steps.map((step, index) => `<span class="${index <= activeStep ? "is-active" : ""}">${esc(step)}</span>`).join("")}
+      </div>
+      <p>正在核对数据、公开来源和证据缺口。长回答会慢一点，但不会让你盲等。</p>
     </div>
   </div>`;
 }
@@ -711,7 +716,7 @@ document.addEventListener("submit", async (event) => {
   if (!question || isBusy) return;
   input.value = "";
   appendMessage("user", question);
-  startBusy("模型正在思考");
+  startBusy("正在检索和思考");
   render();
   try {
     await sendChat(question);

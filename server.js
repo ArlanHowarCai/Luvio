@@ -32,6 +32,7 @@ import { handleWatchlistList, handleWatchlistAdd, handleWatchlistGet, handleWatc
 import { handleSessionList, handleSessionClear, handleSessionGet, handleSessionDelete, handleSessionMemo } from "./src/server/routes/research.js";
 import { handleChatApi } from "./src/server/routes/chat.js";
 import { handleReportGenerateApi } from "./src/server/routes/reports.js";
+import { handleWebResearchApi } from "./src/server/routes/webResearch.js";
 
 // Data repositories for snapshot caching
 import { saveMarketSnapshot } from "./src/db/index.js";
@@ -163,6 +164,7 @@ const server = createServer(async (req, res) => {
   if (method === "GET" && url.startsWith("/api/filings")) return handleFilingsApi(req, res);
   if (method === "POST" && url.startsWith("/api/parse-document")) return handleDocumentParseApi(req, res);
   if (method === "POST" && url === "/api/agent/followup") return handleAgentFollowup(req, res);
+  if (method === "POST" && url.startsWith("/api/web-research")) return handleWebResearchApi(req, res);
   if (method === "POST" && url.startsWith("/api/chat")) return handleChatApi(req, res);
   if (method === "POST" && url.startsWith("/api/agent")) return handleAgentApi(req, res);
   if (method === "POST" && url.startsWith("/api/report/generate")) return handleReportGenerateApi(req, res);

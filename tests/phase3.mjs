@@ -3,6 +3,9 @@ import { computeFinancialQuality } from "../src/server/services/financialQuality
 import { computeValuation } from "../src/server/services/valuationEngine.js";
 import { buildRiskRadar } from "../src/server/services/riskEngine.js";
 import { callModel, getProviderStatus } from "../src/server/services/modelGateway.js";
+import { classifyResearchIntent, buildEvidenceQueries, RESEARCH_INTENTS } from "../src/server/services/intentClassifier.js";
+import { webEvidenceToPrompt } from "../src/server/services/webEvidenceService.js";
+import { saveWebEvidence, listWebEvidence } from "../src/server/repositories/webEvidenceRepository.js";
 
 let pass = 0;
 let fail = 0;
@@ -127,6 +130,53 @@ check("callModel returns null when no keys configured", async () => {
       if (v) process.env[k] = v;
     }
   }
+});
+
+console.log("\n[5] Web evidence layer");
+check("intent classifier detects competitor questions", () => {
+  assert.equal(classifyResearchIntent("联想竞争对手有哪些？"), RESEARCH_INTENTS.competitors);
+  assert.equal(classifyResearchIntent("阿里靠什么赚钱？"), RESEARCH_INTENTS.businessModel);
+  assert.equal(classifyResearchIntent("腾讯为什么跌？"), RESEARCH_INTENTS.riskEvent);
+});
+
+check("buildEvidenceQueries returns focused search queries", () => {
+  const queries = buildEvidenceQueries({
+    company: { ticker: "0992.HK", nameZh: "联想集团", nameEn: "Lenovo Group Limited" },
+    question: "竞争对手有哪些？",
+    intent: RESEARCH_INTENTS.competitors
+  });
+  assert.ok(queries.length >= 4);
+  assert.ok(queries.some((query) => /competitors|竞争对手/i.test(query)));
+});
+
+check("web evidence repository saves and reads cached evidence", () => {
+  const id = `test_web_${Date.now()}`;
+  saveWebEvidence([{
+    id,
+    ticker: "0992.HK",
+    intent: RESEARCH_INTENTS.competitors,
+    query: "Lenovo competitors",
+    title: "Lenovo PC market share",
+    url: `https://example.com/${id}`,
+    source: "Example",
+    sourceType: "industry_research",
+    snippet: "Lenovo competes with HP and Dell.",
+    fetchedAt: new Date().toISOString(),
+    relevanceScore: 0.8,
+    credibilityScore: 0.7
+  }]);
+  const rows = listWebEvidence({ ticker: "0992.HK", intent: RESEARCH_INTENTS.competitors, limit: 20, maxAgeHours: 1 });
+  assert.ok(rows.some((row) => row.id === id));
+});
+
+check("webEvidenceToPrompt includes source links", () => {
+  const prompt = webEvidenceToPrompt({
+    provider: "test",
+    summary: "保留 1 条证据",
+    evidence: [{ title: "Lenovo results", source: "IR", url: "https://investor.lenovo.com/", snippet: "Revenue and margin." }]
+  });
+  assert.match(prompt, /Web Evidence/);
+  assert.match(prompt, /https:\/\/investor\.lenovo\.com/);
 });
 
 // Output

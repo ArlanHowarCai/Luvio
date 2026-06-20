@@ -5,6 +5,8 @@ import { callModel, getProviderStatus } from "../services/modelGateway.js";
 import { withTimeout } from "../utils/async.js";
 import { companies, companyByTicker } from "../../data.js";
 import { saveResearchSession } from "../repositories/researchSessions.js";
+import { classifyResearchIntent, RESEARCH_INTENTS } from "../services/intentClassifier.js";
+import { researchWebEvidence, webEvidenceToPrompt } from "../services/webEvidenceService.js";
 
 const COMPETITOR_MAP = {
   "0992.HK": [
@@ -152,15 +154,15 @@ function sourceLines(panel, dataSources = {}) {
 }
 
 function isMoatQuestion(question = "") {
-  return /护城河|竞争优势|壁垒|不可替代|垄断|网络效应|优势在哪|优势是什么/.test(String(question));
+  return classifyResearchIntent(question) === RESEARCH_INTENTS.moat;
 }
 
 function isBusinessModelQuestion(question = "") {
-  return /靠什么赚钱|怎么赚钱|如何赚钱|盈利模式|商业模式|收入来源|主要收入|利润来源|赚的是什么钱|谁付钱|变现方式/.test(String(question));
+  return classifyResearchIntent(question) === RESEARCH_INTENTS.businessModel;
 }
 
 function isCompetitorQuestion(question = "") {
-  return /竞争对手|竞品|对手|同行|同业|可比公司|可比对象|竞争格局|市场格局|行业格局|替代品|谁在抢|和谁竞争|主要竞争|竞争压力/.test(String(question));
+  return classifyResearchIntent(question) === RESEARCH_INTENTS.competitors;
 }
 
 function peerCompanies(profile = {}) {
@@ -197,6 +199,20 @@ function competitorSetFor(profile = {}) {
     .slice(0, 8);
 }
 
+function evidenceSignalsFromWeb(webEvidence = null) {
+  const evidence = Array.isArray(webEvidence?.evidence) ? webEvidence.evidence : [];
+  return evidence
+    .filter((item) => /竞争|竞品|对手|市场份额|出货|行业格局|PC|server|AI|IDC|Canalys|Gartner|Counterpoint|HP|Dell|HPE|Supermicro|competition|competitor|market share|shipment/i.test(`${item.title || ""} ${item.snippet || ""}`))
+    .filter((item) => !/售后|保修|驱动|下载|应用商店|官方商城|购物|促销|优惠|support|drivers|troubleshooting|warranty|repair|store|shopping/i.test(`${item.title || ""} ${item.snippet || ""} ${item.url || ""}`))
+    .slice(0, 5)
+    .map((item, index) => {
+      const source = item.source || item.sourceType || "web evidence";
+      const date = item.publishedAt ? `，${item.publishedAt}` : "";
+      const url = item.url ? `：${item.url}` : "";
+      return `${index + 1}. ${item.title || item.url}（${source}${date}）${url}`;
+    });
+}
+
 function evidenceSignalsFromNews(newsSnapshot = null) {
   const articles = newsSnapshot?.providerStatus === "ok" ? newsSnapshot.articles || [] : [];
   return articles
@@ -217,7 +233,7 @@ function competitorReplyFromPanel(panel, question = "", dataSources = {}, contex
   const moat = Array.isArray(profile.moat) && profile.moat.length ? profile.moat.slice(0, 4) : ["规模", "渠道", "品牌", "客户关系"];
   const risks = Array.isArray(profile.risks) && profile.risks.length ? profile.risks.slice(0, 4).map(cleanSentence) : ["价格竞争", "技术变化", "客户流失", "利润率下滑"];
   const monitors = Array.isArray(profile.monitors) && profile.monitors.length ? profile.monitors.slice(0, 5) : ["收入增速", "利润率", "市场份额", "客户留存", "现金流"];
-  const evidenceSignals = evidenceSignalsFromNews(context.newsSnapshot);
+  const evidenceSignals = [...evidenceSignalsFromWeb(context.webEvidence), ...evidenceSignalsFromNews(context.newsSnapshot)].slice(0, 5);
 
   return [
     `北京时间 ${formatBeijingMinute()}，${name}的竞争对手不能只按“同一个行业”列名字，要按它在哪些利润池里赚钱来拆。`,
@@ -409,6 +425,7 @@ function researchReplyFromPanel(panel, question = "", dataSources = {}, context 
     "",
     "来源：",
     ...sourceLines(panel, dataSources),
+    ...(context.webEvidence?.evidence?.length ? context.webEvidence.evidence.slice(0, 4).map((item) => `- ${item.source || item.sourceType || "Web"}：${item.url}`) : []),
     connected.length ? `\n已接入：${connected.slice(0, 6).join("、")}` : "",
     missing.length ? `证据缺口：${missing.slice(0, 6).join("、")}` : ""
   ];
@@ -420,8 +437,16 @@ export async function handleChatApi(req, res) {
   try {
     const payload = await readJsonBody(req);
     const result = await runAgent(payload);
+    const companyForEvidence = companyByTicker(result.decisionPanel?.ticker || payload.company?.ticker) || payload.company || {};
+    const intent = classifyResearchIntent(payload.question || "");
+    const webEvidence = await withTimeout(
+      researchWebEvidence({ company: companyForEvidence, question: payload.question || "", intent }),
+      9000,
+      { intent, queries: [], evidence: [], gaps: ["网页证据检索超时，本轮先使用本地档案和已接入数据。"], provider: "timeout", searchedAt: new Date().toISOString() }
+    );
     const fallback = researchReplyFromPanel(result.decisionPanel, payload.question || "", result.dataSources, {
-      newsSnapshot: result.newsSnapshot
+      newsSnapshot: result.newsSnapshot,
+      webEvidence
     });
     let content = fallback;
     let chatModel = null;
@@ -429,12 +454,14 @@ export async function handleChatApi(req, res) {
       chatModel = await withTimeout(callModel({
         system: "你是 Luvio 的港股研究助理，风格像资深买方研究员：直接、克制、可证伪。普通对话也要给高质量判断，但不要伪装成完整正式报告，不给买卖指令。即使公开数据不完整，也必须基于公司档案、商业模式、行业常识、当前可得行情/财务/公告和模型推理给阶段判断；缺数据只影响置信度，不能只回答“需要接入数据”。",
         user: buildChatPrompt(payload.question || "", result.decisionPanel, result.dataSources, {
-          newsSnapshot: result.newsSnapshot
+          newsSnapshot: result.newsSnapshot,
+          webEvidence
         })
       }), 16000, null);
       if (chatModel?.content && chatModel.content.length < 9000) content = chatModel.content;
     }
     content = normalizeResearchAnswer(content, result.decisionPanel, result.dataSources);
+    result.webEvidence = webEvidence;
     const sessionId = persistFinalChatSession(payload, result, content);
     sendJson(res, 200, {
       mode: chatModel?.content ? "chat_model" : "chat_local",
@@ -446,7 +473,8 @@ export async function handleChatApi(req, res) {
       userContext: result.userContext,
       dataSources: result.dataSources,
       marketSnapshot: result.marketSnapshot,
-      newsSnapshot: result.newsSnapshot
+      newsSnapshot: result.newsSnapshot,
+      webEvidence
     });
   } catch (error) {
     const status = error.statusCode || 500;
@@ -469,7 +497,17 @@ function persistFinalChatSession(payload, result, content) {
       decisionPanel: panel,
       fullResearch: content,
       reportMarkdown: content,
-      dataSources: result.dataSources,
+      dataSources: {
+        ...result.dataSources,
+        webEvidence: result.webEvidence
+          ? {
+              provider: result.webEvidence.provider,
+              intent: result.webEvidence.intent,
+              count: result.webEvidence.evidence?.length || 0,
+              gaps: result.webEvidence.gaps || []
+            }
+          : null
+      },
       researchStatus: panel?.researchStatus,
       confidence: panel?.confidence,
       thread
@@ -524,7 +562,8 @@ function buildChatPrompt(question, panel, dataSources = {}, context = {}) {
   const competitorCandidates = competitorSetFor(profile || { ticker: panel.ticker })
     .map((item) => `- ${item.name}${item.ticker ? `（${item.ticker}）` : ""}：${item.angle}。${item.note}`)
     .join("\n") || "本地档案暂缺";
-  const newsSignals = evidenceSignalsFromNews(context.newsSnapshot).join("\n") || "本轮没有抓到可直接使用的竞争/行业外部信号";
+  const newsSignals = [...evidenceSignalsFromWeb(context.webEvidence), ...evidenceSignalsFromNews(context.newsSnapshot)].slice(0, 8).join("\n") || "本轮没有抓到可直接使用的竞争/行业外部信号";
+  const webEvidencePrompt = webEvidenceToPrompt(context.webEvidence);
   return `用户问题：${question}
 
 当前研究对象：${panel.companyName}（${panel.ticker}）
@@ -553,6 +592,8 @@ ${sources}
 ${competitorCandidates}
 - 新闻/网页竞争信号：
 ${newsSignals}
+- 公开网页证据：
+${webEvidencePrompt}
 
 回答规则：
 - 输出中文纯文本，可以用短标题，但不要 Markdown 表格。
