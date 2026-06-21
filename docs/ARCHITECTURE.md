@@ -2,172 +2,95 @@
 
 ## 目标
 
-Luvio 的核心是投资研究 agent，而不是单次聊天框。任何新功能都要服务于三件事：
+Luvio 的核心是一个**港美股**投资研究 agent，不是单次聊天框。任何新功能都要服务于三件事：
 
-- 连续对话：同一研究主题可以多轮追问、纠错和补充材料。
-- 记忆沉淀：成本、持仓、偏好、关注主题和已上传资料要成为后续上下文。
-- 可复盘资产：回答最终要能沉淀到公司档案、报告、备忘录和关注列表。
+- **连续对话**：同一研究主题可以多轮追问、纠错、补充材料。
+- **证据优先**：每个判断都带可点击、可信度评分、URL 校验过的来源。
+- **可复盘资产**：回答能沉淀为研究会话、决策面板、估值、可导出报告。
 
 ## 项目结构
 
 ```
 luvio/
-├── index.html             ← SPA 入口
-├── server.js              ← HTTP 网关、静态文件、API 路由
-├── package.json           ← 依赖：better-sqlite3
-├── luvio.db               ← SQLite 数据库（gitignored，npm run seed 创建）
-├── .env                   ← API Key 等敏感配置（gitignored）
+├── index.html                 ← SPA 入口
+├── server.js                  ← 瘦 HTTP 路由（只挂前端真正用到的端点）+ 静态文件
+├── luvio.db                   ← SQLite（gitignored，npm run seed 创建）
+├── .env                       ← API Key（gitignored）
 │
 ├── src/
-│   ├── app.js             ← 页面渲染、路由、localStorage、用户交互
-│   ├── styles.css         ← 全局样式（6500+ 行）
-│   ├── modelClient.js     ← 前端 → 服务端 API 请求封装
-│   ├── data.js            ← 种子数据（35 家 + detailOverrides）+ 估值/报告/备忘录模板
-│   │
-│   ├── data/
-│   │   └── hkStocks.js    ← 650+ 家港股公司全量列表（universe source of truth）
-│   │
-│   ├── db/
-│   │   └── index.js       ← SQLite 连接、schema 初始化、CRUD 函数
-│   │
-│   ├── agent/             ← 研究 Agent（DeepSeek function calling）
-│   │   ├── agent.js       ← Agent 引擎：iteration / tool dispatch
-│   │   ├── provider.js    ← LLM Provider 适配（OpenAI 兼容）
-│   │   ├── tool.js        ← 工具基类
-│   │   ├── toolRegistry.js
-│   │   ├── index.js       ← 工厂方法 createResearchAgent()
-│   │   └── tools/
-│   │       ├── market.js      ← get_market_data
-│   │       ├── financials.js  ← get_financial_data
-│   │       ├── news.js        ← get_news_and_filings
-│   │       ├── company.js     ← get_company_profile
-│   │       └── research.js    ← summarize_research
-│   │
-│   ├── marketData.js      ← 行情适配器（Tencent Finance / FMP / etc.）
-│   ├── financialData.js   ← 财报数据适配器（FMP）
-│   ├── newsData.js        ← 新闻适配器
-│   ├── filingData.js      ← 公告数据适配器
-│   ├── documentParser.js  ← 上传资料解析（PDF/图片/文本）
-│   ├── prompts.js         ← Agent system prompt + 工作流注册表
-│   └── productStrategy.js ← 产品价值、竞品分析、定位文本
+│   ├── app.js                 ← 渲染、路由(研究室/对比/设置)、localStorage、交互
+│   ├── styles.css             ← Apple 质感 UI（设计 token + 动效）
+│   ├── market.js              ← ★ 市场识别层：detectMarket(HK/US) + 各源 symbol 映射 + 币种
+│   ├── data.js                ← 港股精选档案 + ticker 归一 + 报告/备忘录模板
+│   ├── marketData.js          ← 行情适配（港股腾讯 / 美股 Finnhub·AlphaVantage·Yahoo）
+│   ├── financialData.js       ← 财报适配（FMP /stable / Finnhub / Yahoo / 腾讯）
+│   ├── newsData.js · filingData.js · documentParser.js · prompts.js
+│   ├── data/hkStocks.js       ← 650+ 港股 universe（可搜索表 source of truth）
+│   ├── db/index.js            ← SQLite 连接 + schema
+│   └── server/
+│       ├── routes/            ← chat · reports · compare · companies · research · status · documents
+│       ├── services/          ← answerComposer · valuationEngine · financialQuality ·
+│       │                         webEvidenceService · agentService · decisionPanel ·
+│       │                         dataSources · modelGateway · intentClassifier · reportComposer …
+│       ├── repositories/      ← researchSessions · companyRepository · webEvidenceRepository …
+│       └── schemas/           ← agentPanel（结构化输出校验）
 │
-├── scripts/
-│   ├── seed-db.js         ← 数据库种子脚本（npm run seed）
-│   └── extract_pdf_text.py
-│
-├── tests/
-│   └── smoke.mjs          ← 冒烟测试
-│
-└── docs/
-    ├── ARCHITECTURE.md    ← 本文
-    ├── DATABASE.md        ← 数据库 schema 和查询指南
-    ├── DATA_PIPELINE.md   ← 数据流、实时数据、添加新公司
-    ├── PRD.md             ← 产品需求文档
-    ├── PLATFORM_BENCHMARK.md
-    └── AI_INTEGRATION.md
+├── scripts/seed-db.js         ← 数据库种子
+├── tests/                     ← smoke · reliability · phase3
+└── docs/                      ← 本目录
 ```
 
-## 分层架构
+> 已移除的历史包袱：`src/agent/`（function-calling 旧引擎）、`/api/agent`·`/api/watchlist`·`/api/web-research`·`/api/market` 等前端不调用的路由、旧版 `/api/report`。`server.js` 现在只挂 6 类端点。
+
+## 单趟研究管线（/api/chat）
+
+chat 路由很薄，编排一次数据采集 + 一次模型调用 + 一次落库：
 
 ```
-┌─────────────────────────────────────────────────────┐
-│                   前端 (src/app.js)                   │
-│  render() → shell() → 3-column workspace            │
-│  localStorage: 研究状态、会话历史、watchlist           │
-│  事件委托: click/input/submit/change → action map   │
-├─────────────────────────────────────────────────────┤
-│                 API 层 (src/modelClient.js)           │
-│  fetch /api/agent → POST                            │
-│  fetch /api/market → GET                            │
-│  fetch /api/news → GET                              │
-│  fetch /api/parse-document → POST                   │
-├─────────────────────────────────────────────────────┤
-│                服务端 (server.js)                     │
-│  HTTP 路由 + 静态文件 + API 编排                      │
-│  模型调用 + 工具执行 + 响应合成                       │
-├─────────────────────────────────────────────────────┤
-│              数据层                                   │
-│  ┌──────────────┐  ┌──────────────────────────┐     │
-│  │  luvio.db    │  │  外部 API                 │     │
-│  │  (SQLite)     │  │  · Financial Modeling Prep│     │
-│  │   · companies │  │  · Tencent Finance       │     │
-│  │   · company_  │  │  · News API / Finnhub    │     │
-│  │     details   │  │  · HKEXnews              │     │
-│  │   · market_   │  └──────────────────────────┘     │
-│  │     snapshots │                                    │
-│  │   · research_ │                                    │
-│  │     sessions  │                                    │
-│  └──────────────┘                                    │
-└─────────────────────────────────────────────────────┘
+POST /api/chat
+  │
+  ├─ classifyResearchIntent(question)            ← 意图：财务质量/护城河/竞争/证伪/估值…
+  │
+  ├─ Promise.all:
+  │     ├─ runAgent(persist:false, useModelPanel:false)   ← 行情+财报+新闻+公告 并行采集 → 本地决策面板
+  │     └─ researchWebEvidence(...)                       ← 网页证据(Tavily→DDG/Yahoo/Bing) + URL校验 + 正文抽取
+  │
+  ├─ displayValuation(profile, market, financials)        ← 估值区间 + 赔率（自洽守卫）
+  ├─ buildChatPrompt(...) → callModel(单次, 30s)          ← 模型生成正文；超时→意图聚焦的本地兜底
+  ├─ mergeEvidenceIntoPanel(panel, webEvidence)           ← 证据并入面板(去重/可信度) → 持久化
+  └─ persistFinalChatSession(...)                         ← 单次落库
 ```
 
-## 前端边界
+答案的所有模板/拼装逻辑都在 `services/answerComposer.js`（route 不含文案）。深度研究 `/api/report/generate` 复用同一管线，换一个报告 prompt。
 
-- `src/app.js`：页面渲染、路由、localStorage 状态和用户交互。
-- `src/modelClient.js`：所有前端到服务端 API 的请求封装。
-- `src/styles.css`：视觉样式。三栏研究工作台（240px + 1fr + 280px）。
-- `src/data.js`：估值、报告和备忘录模板。
+## 市场识别层（HK + US）
 
-前端可以保存轻量记忆（研究状态、会话、watchlist），但不要在浏览器中保存模型密钥。
+`src/market.js` 是"哪个市场、symbol 怎么拼"的唯一来源：
 
-## 服务端边界
+| 函数 | 作用 |
+|---|---|
+| `detectMarket(t)` | 数字/.HK → `HK`；字母/.US → `US` |
+| `fmpSymbol` / `finnhubSymbol` / `yahooSymbol` / `alphaVantageSymbol` / `twelveDataSymbol` / `tencentSymbol` | 按市场拼对应源的 symbol |
+| `marketCurrency` | US→USD，HK→HKD |
 
-- `server.js`：HTTP 网关、模型调用编排、静态文件服务。
-- `src/db/index.js`：数据库连接和查询。
-- `src/documentParser.js`：上传资料解析。
-- `src/marketData.js`：行情适配器。
-- `src/newsData.js`：新闻与舆论适配器。
-- `src/prompts.js`：agent 角色、工作流和提示词注册表。
+行情与财报源都按 `detectMarket` 选择 provider 顺序。**美股基本面用裸 symbol 查 FMP `/stable` → 免费档返回真实 EPS/FCF/利润率**；港股 FMP 免费档被 premium 封锁，优雅回退腾讯/Yahoo。
 
-服务端接口应该保持可降级：行情、新闻或模型超时时，要返回阶段性研究结果。
+## 数据层
 
-## 港股公司数据
+```
+SQLite luvio.db                         外部 API（按市场路由）
+ · companies / company_details   行情  港股: Tencent Finance(免费)
+ · market_snapshots                     美股: Finnhub / Alpha Vantage / Yahoo
+ · research_sessions(含 panel/估值/来源)  财报  US: FMP /stable（真财报）  HK: 腾讯/Yahoo 基础
+ · web_evidence(缓存+可信度)              证据  Tavily / SerpAPI →（无 key）DuckDuckGo / Yahoo / Bing
+```
 
-当前包含 **650+ 家** 港股公司覆盖：
+服务端接口保持可降级：任何源超时都返回 missing 占位，下游照常给阶段判断。
 
-- **数据源**：`src/data/hkStocks.js` 是 universe 的 source of truth
-- **存储**：SQLite `companies` + `company_details` 表
-- **检索**：`getCompanyByTicker()`、`findCompanies()`、`getCompaniesBySector()`
-- **覆盖**：恒指成分股 ~80 家 + 大型中概股 + 各行业代表性公司
-- **扩展**：编辑 `hkStocks.js` + `npm run seed` 即可添加新公司
+## 前端
 
-详见 `docs/DATABASE.md`。
+`src/app.js` 单文件：三个路由（研究室 / 对比 / 设置），事件委托(click/submit/change/keydown → action map)，localStorage 存研究状态。两栏工作台（侧栏 + 研究区），回答卡内联渲染**估值区间条、证据溯源卡、置信度芯片、状态标签**。不在浏览器保存模型密钥。
 
-## Agent 输入
+## 测试
 
-`POST /api/agent` 必须接收并使用：
-
-- `question`：本轮用户问题。
-- `company`：当前研究对象（从 DB 获取）。
-- `filings`：公司页导入的公告材料。
-- `history`：最近多轮对话。
-- `memory`：用户长期记忆。
-- `documents`：上传资料解析结果。
-
-## Agent 工具
-
-| 工具 | 函数 | 数据源 |
-|------|------|--------|
-| `get_company_profile` | DB + FMP | `companies` + `company_details` + `financialData.js` |
-| `get_market_data` | 外部 API | Tencent Finance / FMP / Alpha Vantage |
-| `get_financial_data` | 外部 API | Financial Modeling Prep |
-| `get_news_and_filings` | 外部 API | News API / Finnhub |
-| `summarize_research` | Agent 合成 | 以上所有数据 |
-
-## 研究室展示状态
-
-研究室的首页（空状态）= 专业投资研究工作台，包含：
-
-- 左侧边栏：新建研究、搜索、最近研究列表、设置
-- 中心区：Hero、3 步研究流程卡片、5 个研究模板、带快捷芯片的 Composer
-- 右侧面板：研究概况、数据源状态、上传资料入口
-
-用户提交问题后进入三栏研究 workspace 进行深度研究。
-
-## 文档解析
-
-`POST /api/parse-document` 接收前端传入的 `name`、`type`、`dataUrl`，返回统一资料对象：
-
-- `name`、`type`、`size`、`parser`、`text`、`summary`、`createdAt`
-
-图片当前记录元数据；接入视觉 OCR 后应替换 `src/documentParser.js` 内部实现。
+`npm test` = smoke（报告合成/会话持久化）+ reliability（agentService/decisionPanel/估值/财务质量）+ phase3（意图分类/财务质量引擎/网页证据/估值/风险）。

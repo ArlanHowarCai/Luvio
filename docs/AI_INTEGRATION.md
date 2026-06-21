@@ -16,61 +16,32 @@
 
 ## 当前网关
 
-本地服务提供：
+研究对话主入口（单趟管线：一次采集 + 一次模型 + 一次落库）：
 
 ```http
-POST /api/agent
-POST /api/report
-GET /api/market?ticker=0700.HK
+POST /api/chat                 # 研究对话
+POST /api/report/generate      # 深度研究报告（同管线，换报告 prompt）
+GET  /api/compare?tickers=...  # 多公司对比（无模型）
+GET  /api/companies/search?q=  # 公司检索
+GET  /api/status               # 数据源/模型状态
 ```
 
-请求体：
+`/api/chat` 内部：`classifyResearchIntent` 先分意图（company_status / business_model / moat / competitors / **financial_quality**（含口语“赚钱吗”）/ valuation / **falsify**（证伪）/ deep_research），再据此选择本地兜底答案器和模型 prompt 的段落规则。估值（`displayValuation`）在模型调用前算好并注入 prompt，保证文字与可视化口径一致。
 
-```json
-{
-  "question": "腾讯现在贵不贵？",
-  "company": {},
-  "filings": [],
-  "promptVersion": "luvio-prompts-v0.4"
-}
-```
+返回含：`mode`(chat_model/chat_local)、`intent`、`content`、`decisionPanel`(含估值/来源)、`valuation`、`webEvidence`、`dataSources`。模型超时则回退到意图聚焦的本地答案（仍带判断，不是“数据不足”）。
 
-返回：
+模型由 `modelGateway` 适配（DeepSeek 优先，OpenAI 兼容）；无 key 时返回本地兜底，用于稳定演示。
 
-```json
-{
-  "mode": "model",
-  "model": "由 OPENAI_MODEL 控制",
-  "content": "模型输出"
-}
-```
+## 行情源（按市场路由）
 
-如果没有 `OPENAI_API_KEY`，网关返回 `mode: "local"`，用于稳定演示。
+`src/market.js` 的 `detectMarket` 决定 provider 顺序：
 
-## 行情源
+- **港股**：Tencent Finance（免费）→ Finnhub → Alpha Vantage → Twelve Data → Yahoo。
+- **美股**：Finnhub → Alpha Vantage → Twelve Data → Yahoo。
 
-港股行情会优先尝试 Tencent Finance 公开接口作为免费兜底。也支持以下环境变量，任意配置一个即可：
+币种按市场自动判定（USD / HKD）。全部失败返回 `providerStatus: "missing"`，前端显示“实时数据未接入”。
 
-- `ALPHAVANTAGE_API_KEY`
-- `TWELVEDATA_API_KEY`
-- `FINNHUB_API_KEY`
-
-优先级：
-
-1. Alpha Vantage
-2. Twelve Data
-3. Finnhub
-4. Yahoo Chart 公开接口兜底
-
-实际执行顺序：
-
-1. Tencent Finance 港股公开接口
-2. Finnhub
-3. Alpha Vantage
-4. Twelve Data
-5. Yahoo Chart 公开接口兜底
-
-如果全部失败，接口返回 `providerStatus: "missing"`，前端显示“实时数据未接入”。
+财报：美股 FMP `/stable`（真实三表）优先；港股 FMP 免费档受限，回退 Finnhub/Yahoo/腾讯基础数据。
 
 ## 密钥策略
 
