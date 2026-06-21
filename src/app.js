@@ -487,17 +487,37 @@ async function sendChat(question) {
     webCount: result.webEvidence?.evidence?.length ?? 0,
     sources: dataSourceLabels(result.dataSources),
     confidence: result.decisionPanel?.confidence || null,
-    evidence: (result.webEvidence?.evidence || []).slice(0, 6).map((e) => ({
-      title: e.title || e.source || "网页证据",
-      url: e.url,
-      source: e.source || e.sourceType || "web",
-      type: e.sourceType || "web",
-      cred: e.credibilityScore ?? null,
-      date: e.publishedAt || ""
-    }))
+    evidence: provenanceFromPanel(result.decisionPanel)
   });
   await refreshSessions();
   render();
+}
+
+function hostFromUrl(url = "") {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return "";
+  }
+}
+
+// Default credibility per source type so even keyless official links get a sensible dot.
+const TYPE_CRED_DEFAULT = { official: 0.9, industry_research: 0.82, financial_media: 0.72, cn_financial_media: 0.6, market: 0.7, news: 0.55, web: 0.45 };
+
+/** Build clickable provenance cards from the decision panel's sources (official + web). */
+function provenanceFromPanel(panel) {
+  const sources = Array.isArray(panel?.sources) ? panel.sources : [];
+  return sources
+    .filter((s) => s.url)
+    .slice(0, 6)
+    .map((s) => ({
+      title: s.label || hostFromUrl(s.url) || "来源",
+      url: s.url,
+      source: hostFromUrl(s.url) || s.type || "web",
+      type: s.type || (s.origin === "web_evidence" ? "web" : "official"),
+      cred: typeof s.credibility === "number" ? s.credibility : (TYPE_CRED_DEFAULT[s.type] ?? null),
+      date: s.timestamp || ""
+    }));
 }
 
 function dataSourceLabels(dataSources = {}) {
@@ -747,6 +767,8 @@ const SOURCE_TYPE_LABEL = {
   industry_research: "行研",
   financial_media: "财经媒体",
   cn_financial_media: "国内财经",
+  market: "行情",
+  news: "新闻",
   web: "网页"
 };
 

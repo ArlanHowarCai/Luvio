@@ -405,17 +405,42 @@ async function searchOneQuery(query) {
   return { results, errors };
 }
 
-/** Readability-lite: pull the main article text out of a raw HTML page. */
-function extractMainText(html = "") {
-  let body = String(html)
+// Phrase-level boilerplate so single words inside real prose (e.g. 广告业务) survive.
+const BOILERPLATE = /subscribe to|sign in|sign up|newsletter|cookie policy|advertisement|all rights reserved|版权所有|免责声明|关注我们|扫码关注|下载\s*app|相关阅读|登录\s*\/?\s*注册|点击.{0,4}订阅/i;
+
+function metaContent(html, name) {
+  const re = new RegExp(`<meta[^>]+(?:property|name)=["']${name}["'][^>]*content=["']([^"']+)["']`, "i");
+  const m = String(html).match(re);
+  return m ? decodeXml(m[1]).trim() : "";
+}
+
+/**
+ * Readability-lite v2: extract the main article body from raw HTML.
+ * Strategy: drop chrome/boilerplate, score <p> blocks by length, and lead with
+ * the page's own meta/og description so even thin pages yield a usable excerpt.
+ */
+export function extractMainText(html = "") {
+  const lead = metaContent(html, "og:description") || metaContent(html, "description");
+  const body = String(html)
     .replace(/<script[\s\S]*?<\/script>/gi, " ")
     .replace(/<style[\s\S]*?<\/style>/gi, " ")
-    .replace(/<(nav|header|footer|aside|form)[\s\S]*?<\/\1>/gi, " ");
-  const paras = [...body.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/gi)]
-    .map((m) => decodeXml(m[1]))
-    .filter((t) => t && t.length >= 40);
-  const text = (paras.length ? paras.join(" ") : decodeXml(body)).replace(/\s+/g, " ").trim();
-  return text.slice(0, 700);
+    .replace(/<noscript[\s\S]*?<\/noscript>/gi, " ")
+    .replace(/<(nav|header|footer|aside|form|figure)[\s\S]*?<\/\1>/gi, " ");
+  const paras = [...body.matchAll(/<(?:p|article|h2|h3|li)[^>]*>([\s\S]*?)<\/(?:p|article|h2|h3|li)>/gi)]
+    .map((m) => decodeXml(m[1]).replace(/\s+/g, " ").trim())
+    .filter((t) => t.length >= 40 && !BOILERPLATE.test(t));
+  const parts = [];
+  const seen = new Set();
+  if (lead && lead.length >= 12) parts.push(lead);
+  for (const p of paras) {
+    const key = p.slice(0, 60);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    parts.push(p);
+    if (parts.join(" ").length > 800) break;
+  }
+  const text = (parts.length ? parts.join(" ") : decodeXml(body).replace(/\s+/g, " ").trim());
+  return text.slice(0, 800);
 }
 
 /** Best-effort: fetch the top evidence pages and attach an extracted excerpt. */
