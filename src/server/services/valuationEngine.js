@@ -29,6 +29,45 @@ import { compactNumberServer } from "../utils/format.js";
  * @param {string} opts.sector       — sector for PE reference
  * @returns {{ method, bear, base, bull, keyAssumptions, sensitivity, cannotValueReason }}
  */
+/**
+ * Display-safe valuation: runs computeValuation, but if its range is incoherent
+ * with the live price (cross-source EPS/currency mismatches can put the price
+ * outside bear..bull), falls back to a self-consistent PE dispersion band so the
+ * visualization is never misleading. Returns cannotValueReason when even a band
+ * can't be built.
+ */
+export function displayValuation(company, marketSnapshot, financialsData) {
+  const v = computeValuation(company, marketSnapshot, financialsData);
+  const price = parseFloat(v.currentPrice);
+  const bear = parseFloat(v.bear);
+  const bull = parseFloat(v.bull);
+  const coherent =
+    !v.cannotValueReason &&
+    [bear, bull, price].every((n) => Number.isFinite(n)) &&
+    bear > 0 &&
+    bear < price &&
+    price < bull;
+  if (coherent) return v;
+
+  const p = marketSnapshot?.price ?? company?.price;
+  const pe = marketSnapshot?.pe ?? company?.pe;
+  if (p && pe) {
+    const base = p;
+    return {
+      method: "PE 区间",
+      bear: (p * 0.78).toFixed(2),
+      base: base.toFixed(2),
+      bull: (p * 1.28).toFixed(2),
+      currentPrice: p,
+      methods: ["PE 区间"],
+      keyAssumptions: [`基于现价与 PE ${pe}x 的估值带（约 ±25%，反映 PE 收缩/扩张）`],
+      sensitivity: [],
+      cannotValueReason: null
+    };
+  }
+  return { ...v, cannotValueReason: v.cannotValueReason || "缺少自洽的估值口径。" };
+}
+
 export function computeValuation(company, marketSnapshot, financialsData) {
   if (!company || !marketSnapshot) {
     return {

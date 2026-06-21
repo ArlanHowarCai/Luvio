@@ -603,6 +603,7 @@ function shell(content) {
         <a class="brand" href="#/" aria-label="Luvio 首页"><span>L</span><strong>Luvio</strong><em>Research</em></a>
         <nav>
           ${nav("/", "研究室")}
+          ${nav("/compare", "对比")}
           ${nav("/settings", "设置")}
         </nav>
       </header>
@@ -798,13 +799,14 @@ function renderValuation(valuation) {
   const pct = (v) => Math.max(0, Math.min(100, ((v - lo) / span) * 100));
   const fmt = (v) => (Math.abs(v) >= 100 ? v.toFixed(0) : v.toFixed(2));
 
-  // Reward / risk odds from base upside vs bear downside.
-  const up = price ? (base - price) / price : 0;
+  // Reward:risk odds from bull upside vs bear downside (robust even for the
+  // mechanical PE band where base == price).
+  const up = price ? (bull - price) / price : 0;
   const down = price ? (price - bear) / price : 0;
   const odds = down > 0.0001 ? (up / down) : null;
-  const oddsText = odds && odds > 0 ? `${odds.toFixed(1)} : 1` : "下行有限";
-  const upText = valuation.upside || `${(up * 100).toFixed(1)}%`;
-  const downText = valuation.downside || `${((bear - price) / price * 100).toFixed(1)}%`;
+  const oddsText = odds && odds > 0 ? `${odds.toFixed(1)} : 1` : "—";
+  const upText = `+${(up * 100).toFixed(0)}%`;
+  const downText = `${((bear - price) / price * 100).toFixed(0)}%`;
   const zoneLeft = Math.min(pct(bear), pct(bull));
   const zoneWidth = Math.abs(pct(bull) - pct(bear));
 
@@ -824,7 +826,7 @@ function renderValuation(valuation) {
     </div>
     <div class="valuation-stats">
       <span>现价 <b>${esc(fmt(price))}</b></span>
-      <span class="${up >= 0 ? "pos" : "neg"}">中性上行 <b>${esc(upText)}</b></span>
+      <span class="pos">看多上行 <b>${esc(upText)}</b></span>
       <span class="neg">看空下行 <b>${esc(downText)}</b></span>
       <span class="odds">赔率 <b>${esc(oddsText)}</b></span>
     </div>
@@ -885,6 +887,82 @@ function renderMessage(message) {
   </article>`;
 }
 
+let compareInput = "";
+let compareResult = null;
+let compareBusy = false;
+
+async function runCompare(rawInput) {
+  const parts = String(rawInput).split(/[,，、\s]+/).map((s) => s.trim()).filter(Boolean);
+  compareInput = rawInput;
+  if (parts.length < 2) {
+    toast("请至少输入 2 家公司。");
+    return;
+  }
+  compareBusy = true;
+  render();
+  try {
+    const tickers = [];
+    for (const part of parts.slice(0, 3)) {
+      const resolved = await resolveCompany(part);
+      if (resolved?.ticker && !tickers.includes(resolved.ticker)) tickers.push(resolved.ticker);
+    }
+    if (tickers.length < 2) {
+      toast("没能识别出至少 2 家公司，换个写法试试。");
+      return;
+    }
+    const data = await api(`/api/compare?tickers=${encodeURIComponent(tickers.join(","))}`);
+    compareResult = data.companies || [];
+  } catch (error) {
+    toast(error.message || "对比失败。");
+  } finally {
+    compareBusy = false;
+    render();
+  }
+}
+
+function renderCompareTable(companies) {
+  const valid = companies.filter((c) => !c.notFound);
+  const missing = companies.filter((c) => c.notFound);
+  if (!valid.length) return `<div class="compare-empty">没有识别到可对比的公司。</div>`;
+  const dims = [
+    ["现价 / PE", (c) => `${c.price ?? "—"}${c.pe ? ` · ${c.pe}x` : ""}`],
+    ["估值赔率", (c) => (c.odds != null ? `<b>${c.odds} : 1</b><small>${esc(c.valuationMethod || "PE")}${c.upside ? ` · 上行 ${esc(c.upside)}` : ""}</small>` : "<small>数据不足</small>")],
+    ["利润质量", (c) => (c.qualityScore != null ? `<b>${c.qualityScore}</b><small>/100</small>` : "<small>待财报核验</small>")],
+    ["护城河", (c) => (c.moat && c.moat.length ? c.moat.map((m) => `<span class="cmp-chip">${esc(m)}</span>`).join("") : "—")],
+    ["主要风险", (c) => (c.risks && c.risks.length ? c.risks.map((r) => `<span class="cmp-chip risk">${esc(r)}</span>`).join("") : "—")]
+  ];
+  const cols = `140px repeat(${valid.length}, minmax(0, 1fr))`;
+  const header = `<div class="cmp-row cmp-header" style="grid-template-columns:${cols}">
+    <div class="cmp-label"></div>
+    ${valid.map((c) => `<div class="cmp-co"><strong>${esc(c.name)}</strong><span>${esc(c.ticker)}${c.industry ? ` · ${esc(c.industry)}` : ""}</span></div>`).join("")}
+  </div>`;
+  const rows = dims
+    .map(
+      ([label, fn]) => `<div class="cmp-row" style="grid-template-columns:${cols}">
+      <div class="cmp-label">${esc(label)}</div>
+      ${valid.map((c) => `<div class="cmp-cell">${fn(c)}</div>`).join("")}
+    </div>`
+    )
+    .join("");
+  const note = missing.length ? `<div class="compare-empty">未收录：${missing.map((m) => esc(m.ticker)).join("、")}</div>` : "";
+  return `<div class="compare-grid">${header}${rows}</div>${note}`;
+}
+
+function renderCompare() {
+  shell(`<section class="simple-page compare-page">
+    <div class="page-head">
+      <p class="eyebrow">Compare</p>
+      <h1>多公司对比</h1>
+      <span>并排比较估值赔率、利润质量、护城河与风险。输入 2–3 家公司，名称或港股代码都行。</span>
+    </div>
+    <form class="compare-form" data-form="compare">
+      <input name="tickers" placeholder="例如：腾讯, 阿里巴巴, 美团 — 或 0700.HK, 9988.HK" value="${esc(compareInput)}" autocomplete="off">
+      <button class="primary" type="submit" ${compareBusy ? "disabled" : ""}>${compareBusy ? "对比中…" : "开始对比"}</button>
+    </form>
+    ${compareResult ? renderCompareTable(compareResult) : `<div class="compare-empty">输入公司名或港股代码，用逗号分隔，最多 3 家。<br>对比不调用大模型，几秒内出结果。</div>`}
+  </section>`);
+}
+
 function renderSettings() {
   const sources = apiStatus?.sources || [];
   const providers = apiStatus?.ai?.providers || [];
@@ -912,10 +990,18 @@ function renderSettings() {
 
 function render() {
   if (currentRoute() === "/settings") renderSettings();
+  else if (currentRoute() === "/compare") renderCompare();
   else renderResearch();
 }
 
 document.addEventListener("submit", async (event) => {
+  const compareForm = event.target.closest("[data-form='compare']");
+  if (compareForm) {
+    event.preventDefault();
+    if (compareBusy) return;
+    await runCompare(compareForm.elements.tickers.value);
+    return;
+  }
   const form = event.target.closest("[data-form='chat']");
   if (!form) return;
   event.preventDefault();
