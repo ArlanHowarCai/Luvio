@@ -487,6 +487,7 @@ async function sendChat(question) {
     webCount: result.webEvidence?.evidence?.length ?? 0,
     sources: dataSourceLabels(result.dataSources),
     confidence: result.decisionPanel?.confidence || null,
+    valuation: result.valuation || null,
     evidence: provenanceFromPanel(result.decisionPanel)
   });
   await refreshSessions();
@@ -779,6 +780,57 @@ function credLevel(score) {
   return "low";
 }
 
+function numFrom(value) {
+  const n = parseFloat(String(value).replace(/[^\d.-]/g, ""));
+  return Number.isFinite(n) ? n : null;
+}
+
+function renderValuation(valuation) {
+  if (!valuation) return "";
+  const bear = numFrom(valuation.bear);
+  const base = numFrom(valuation.base);
+  const bull = numFrom(valuation.bull);
+  const price = numFrom(valuation.currentPrice);
+  if (bear === null || base === null || bull === null || price === null) return "";
+  const lo = Math.min(bear, bull, price);
+  const hi = Math.max(bear, bull, price);
+  const span = hi - lo || 1;
+  const pct = (v) => Math.max(0, Math.min(100, ((v - lo) / span) * 100));
+  const fmt = (v) => (Math.abs(v) >= 100 ? v.toFixed(0) : v.toFixed(2));
+
+  // Reward / risk odds from base upside vs bear downside.
+  const up = price ? (base - price) / price : 0;
+  const down = price ? (price - bear) / price : 0;
+  const odds = down > 0.0001 ? (up / down) : null;
+  const oddsText = odds && odds > 0 ? `${odds.toFixed(1)} : 1` : "下行有限";
+  const upText = valuation.upside || `${(up * 100).toFixed(1)}%`;
+  const downText = valuation.downside || `${((bear - price) / price * 100).toFixed(1)}%`;
+  const zoneLeft = Math.min(pct(bear), pct(bull));
+  const zoneWidth = Math.abs(pct(bull) - pct(bear));
+
+  return `<div class="valuation-block">
+    <div class="valuation-head"><span>估值区间</span><em>${esc(valuation.method || "PE 法")}</em></div>
+    <div class="valuation-bar">
+      <div class="val-zone" style="left:${zoneLeft}%;width:${zoneWidth}%"></div>
+      <div class="val-tick bear" style="left:${pct(bear)}%"></div>
+      <div class="val-tick base" style="left:${pct(base)}%"></div>
+      <div class="val-tick bull" style="left:${pct(bull)}%"></div>
+      <div class="val-price" style="left:${pct(price)}%" title="现价 ${esc(fmt(price))}"></div>
+    </div>
+    <div class="valuation-scale">
+      <span class="bear">看空 ${esc(fmt(bear))}</span>
+      <span class="base">中性 ${esc(fmt(base))}</span>
+      <span class="bull">看多 ${esc(fmt(bull))}</span>
+    </div>
+    <div class="valuation-stats">
+      <span>现价 <b>${esc(fmt(price))}</b></span>
+      <span class="${up >= 0 ? "pos" : "neg"}">中性上行 <b>${esc(upText)}</b></span>
+      <span class="neg">看空下行 <b>${esc(downText)}</b></span>
+      <span class="odds">赔率 <b>${esc(oddsText)}</b></span>
+    </div>
+  </div>`;
+}
+
 function renderEvidenceBlock(evidence) {
   if (!Array.isArray(evidence) || !evidence.length) return "";
   const cards = evidence
@@ -822,6 +874,7 @@ function renderMessage(message) {
           <button class="copy-answer" type="button" data-action="copy-message" data-id="${esc(messageId)}">复制</button>
         </div>
         ${markdownToHtml(message.content)}
+        ${renderValuation(meta.valuation)}
         ${renderEvidenceBlock(meta.evidence)}
         ${renderAnswerMeta(meta)}
       </div>

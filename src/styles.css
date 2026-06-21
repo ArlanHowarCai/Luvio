@@ -754,6 +754,123 @@ button:disabled {
 .conf-mid  { color: #b8770a !important; background: rgba(245, 166, 35, 0.12) !important; }
 .conf-low  { color: #c23934 !important; background: rgba(255, 59, 48, 0.1) !important; }
 
+/* Valuation range + odds */
+.valuation-block {
+  margin-top: 18px;
+  padding: 16px 16px 14px;
+  border: 1px solid var(--hairline);
+  border-radius: 14px;
+  background: var(--panel-glass-strong);
+}
+
+.valuation-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 18px;
+}
+
+.valuation-head span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.valuation-head em {
+  color: var(--muted-2);
+  font-size: 12px;
+  font-style: normal;
+}
+
+.valuation-bar {
+  position: relative;
+  height: 6px;
+  margin: 0 6px 9px;
+  border-radius: 999px;
+  background: var(--panel-soft);
+}
+
+.val-zone {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(255, 59, 48, 0.22), rgba(245, 166, 35, 0.26), rgba(28, 138, 77, 0.26));
+}
+
+.val-tick {
+  position: absolute;
+  top: 50%;
+  width: 2px;
+  height: 12px;
+  transform: translate(-50%, -50%);
+  border-radius: 2px;
+  background: var(--muted-2);
+}
+
+.val-tick.bear { background: #c23934; }
+.val-tick.base { background: #b8770a; }
+.val-tick.bull { background: #1c8a4d; }
+
+.val-price {
+  position: absolute;
+  top: 50%;
+  width: 14px;
+  height: 14px;
+  transform: translate(-50%, -50%);
+  border-radius: 999px;
+  background: var(--ink);
+  border: 3px solid #fff;
+  box-shadow: var(--sh-2);
+  z-index: 2;
+}
+
+.valuation-scale {
+  display: flex;
+  justify-content: space-between;
+  margin: 0 2px 14px;
+  font-size: 11.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.valuation-scale .bear { color: #c23934; }
+.valuation-scale .base { color: #b8770a; }
+.valuation-scale .bull { color: #1c8a4d; }
+
+.valuation-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--hairline);
+}
+
+.valuation-stats span {
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--panel-soft);
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.valuation-stats b {
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.valuation-stats .pos b { color: #1c8a4d; }
+.valuation-stats .neg b { color: #c23934; }
+.valuation-stats .odds {
+  color: var(--blue-ink);
+  background: var(--blue-soft);
+}
+.valuation-stats .odds b { color: var(--blue-ink); }
+
 /* Evidence provenance cards */
 .evidence-block {
   margin-top: 18px;

@@ -6,6 +6,7 @@ import { saveResearchSession } from "../repositories/researchSessions.js";
 import { classifyResearchIntent } from "../services/intentClassifier.js";
 import { researchWebEvidence } from "../services/webEvidenceService.js";
 import { researchReplyFromPanel, normalizeResearchAnswer, buildChatPrompt, mergeEvidenceIntoPanel } from "../services/answerComposer.js";
+import { computeValuation } from "../services/valuationEngine.js";
 
 export async function handleChatApi(req, res) {
   try {
@@ -47,6 +48,9 @@ export async function handleChatApi(req, res) {
     content = normalizeResearchAnswer(content, result.decisionPanel, result.dataSources);
     result.webEvidence = webEvidence;
     mergeEvidenceIntoPanel(result.decisionPanel, webEvidence);
+    const valuationProfile = companyByTicker(result.decisionPanel?.ticker || payload.company?.ticker) || payload.company;
+    const valuation = computeValuation(valuationProfile, result.marketSnapshot, result.financialsData);
+    if (result.decisionPanel && !valuation.cannotValueReason) result.decisionPanel.valuation = valuation;
     const sessionId = persistFinalChatSession(payload, result, content);
     sendJson(res, 200, {
       mode: chatModel?.content ? "chat_model" : "chat_local",
@@ -60,6 +64,7 @@ export async function handleChatApi(req, res) {
       dataSources: result.dataSources,
       marketSnapshot: result.marketSnapshot,
       newsSnapshot: result.newsSnapshot,
+      valuation: valuation.cannotValueReason ? null : valuation,
       webEvidence
     });
   } catch (error) {
