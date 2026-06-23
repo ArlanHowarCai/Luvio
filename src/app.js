@@ -749,6 +749,78 @@ function nav(path, label) {
   return `<a class="${active ? "active" : ""}" href="#${path}">${label}</a>`;
 }
 
+const SNAP_ICONS = {
+  portrait: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8.5" r="3.2"/><path d="M5.5 19c0-3.4 2.9-5.2 6.5-5.2s6.5 1.8 6.5 5.2"/></svg>',
+  digest: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9a6 6 0 0 1 12 0c0 4.5 2 5.8 2 5.8H4S6 13.5 6 9Z"/><path d="M10 18.5a2 2 0 0 0 4 0"/></svg>',
+  "portfolio-view": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="7.5" width="18" height="12" rx="2"/><path d="M8.5 7.5V6a2 2 0 0 1 2-2h3a2 2 0 0 1 2 2v1.5"/><path d="M3 12.5h18"/></svg>',
+  export: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v10"/><path d="M8 11l4 4 4-4"/><path d="M5 19.5h14"/></svg>'
+};
+
+function snapTool(action, label) {
+  return `<button class="snapshot-tool" type="button" data-action="${action}" aria-label="${esc(label)}">${SNAP_ICONS[action]}<span>${esc(label)}</span></button>`;
+}
+
+function renderSnapshotCard(company, panel, thread) {
+  const name = panel?.companyName || company?.nameZh || "未选择公司";
+  const ticker = company?.ticker || panel?.ticker || "";
+  const marketLabel = ticker ? (/\.HK$|^\d/.test(ticker) ? "港股" : "美股") : "";
+  const confLevel = panel?.confidence === "高" ? "high" : panel?.confidence === "低" ? "low" : "mid";
+  const confChip = panel?.confidence
+    ? `<span class="conf conf-${confLevel}">置信度 ${esc(panel.confidence)}</span>`
+    : "";
+
+  const priceRaw = panel?.price?.value && panel.price.value !== "暂不可用" ? String(panel.price.value) : "";
+  const [priceNum, ...ccyParts] = priceRaw.split(" ");
+  const ccy = ccyParts.join(" ");
+  const changeRaw = panel?.price?.change && panel.price.change !== "暂不可用" ? String(panel.price.change) : "";
+  const chgNum = parseFloat(changeRaw);
+  const chgDir = !changeRaw || Number.isNaN(chgNum) ? "is-flat" : chgNum > 0 ? "is-up" : chgNum < 0 ? "is-down" : "is-flat";
+  const chgText = changeRaw ? (chgNum > 0 && !changeRaw.startsWith("+") ? `+${changeRaw}` : changeRaw) : "";
+
+  const metricValue = (metricName) => {
+    const found = (panel?.metrics || []).find((item) => item.name === metricName);
+    const value = found?.value;
+    return value && value !== "暂不可用" ? String(value) : "";
+  };
+  const pe = metricValue("PE");
+  const cap = metricValue("市值");
+
+  const quoteBlock = priceNum
+    ? `<div class="snapshot-quote">
+        <span class="price">${esc(priceNum)}</span>${ccy ? `<span class="ccy">${esc(ccy)}</span>` : ""}
+        ${chgText ? `<span class="chg ${chgDir}">${esc(chgText)}</span>` : ""}
+      </div>`
+    : "";
+
+  const metricChips = (pe || cap)
+    ? `<div class="snapshot-metrics">
+        ${pe ? `<div class="snapshot-metric"><span>TTM PE</span><strong>${esc(pe)}</strong></div>` : ""}
+        ${cap ? `<div class="snapshot-metric"><span>市值</span><strong>${esc(cap)}</strong></div>` : ""}
+      </div>`
+    : "";
+
+  const tools = [
+    ticker ? snapTool("portrait", "画像") : "",
+    snapTool("digest", "事件"),
+    snapTool("portfolio-view", "持仓"),
+    thread.length ? snapTool("export", "导出") : ""
+  ].filter(Boolean).join("");
+
+  return `<section class="research-snapshot">
+    <div class="snapshot-head">
+      <div class="snapshot-id">
+        <p>研究公司</p>
+        <h2>${esc(name)}</h2>
+        <span>${ticker ? `${esc(ticker)}${marketLabel ? ` · ${marketLabel}` : ""}` : "输入公司名、港股或美股代码"}</span>
+      </div>
+      ${confChip}
+    </div>
+    ${quoteBlock}
+    ${metricChips}
+    <div class="snapshot-tools">${tools}</div>
+  </section>`;
+}
+
 function renderResearch() {
   const company = getCompany();
   const panel = getPanel();
@@ -760,16 +832,7 @@ function renderResearch() {
     <section class="workspace">
       <aside class="sidebar">
         <button class="primary wide" data-action="new">新建研究</button>
-        <section class="research-snapshot">
-          <p>研究公司</p>
-          <h2>${esc(panel?.companyName || company?.nameZh || "未选择公司")}</h2>
-          <span>${esc(company?.ticker || panel?.ticker || "输入公司名、港股或美股代码")}</span>
-          ${panel?.confidence ? `<div class="snapshot-confidence"><span class="conf conf-${panel.confidence === "高" ? "high" : panel.confidence === "低" ? "low" : "mid"}">置信度 ${esc(panel.confidence)}</span></div>` : ""}
-          ${(company?.ticker || panel?.ticker) ? `<button class="snapshot-export" type="button" data-action="portrait">公司画像 ◆</button>` : ""}
-          <button class="snapshot-export" type="button" data-action="digest">盘前事件 ◷</button>
-          <button class="snapshot-export" type="button" data-action="portfolio-view">我的持仓 ▣</button>
-          ${thread.length ? `<button class="snapshot-export" type="button" data-action="export">导出研究 ↓</button>` : ""}
-        </section>
+        ${renderSnapshotCard(company, panel, thread)}
         ${renderSessionHistory(activeSessionId)}
       </aside>
 
@@ -966,7 +1029,18 @@ function renderValuation(valuation) {
       <span class="neg">看空下行 <b>${esc(downText)}</b></span>
       <span class="odds">赔率 <b>${esc(oddsText)}</b></span>
     </div>
+    ${renderAnalystAnchor(valuation.analyst, fmt)}
   </div>`;
+}
+
+function renderAnalystAnchor(analyst, fmt) {
+  const target = analyst?.target != null ? numFrom(analyst.target) : null;
+  if (target === null) return "";
+  const low = analyst.low != null ? numFrom(analyst.low) : null;
+  const high = analyst.high != null ? numFrom(analyst.high) : null;
+  const range = low !== null && high !== null ? ` · 区间 ${esc(fmt(low))}~${esc(fmt(high))}` : "";
+  const upside = analyst.upside ? `（较现价 ${esc(analyst.upside)}）` : "";
+  return `<div class="valuation-analyst">分析师目标价 <b>${esc(fmt(target))}</b>${upside}${range}${analyst.source ? ` · ${esc(analyst.source)}` : ""}</div>`;
 }
 
 function renderEvidenceBlock(evidence) {

@@ -33,7 +33,7 @@ export async function handleChatApi(req, res) {
     // Compute valuation before the model call so the prose and the visual bar
     // speak the same odds.
     const valuationProfile = companyByTicker(result.decisionPanel?.ticker || payload.company?.ticker) || payload.company;
-    const valuation = displayValuation(valuationProfile, result.marketSnapshot, result.financialsData);
+    const valuation = displayValuation(valuationProfile, result.marketSnapshot, result.financialsData, result.estimatesData);
     // 长期画像：研究同一公司时自动带上上次沉淀的投资主线/证伪条件，保持连贯。
     const portraitTicker = result.decisionPanel?.ticker || payload.company?.ticker;
     const context = {

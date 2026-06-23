@@ -12,6 +12,7 @@
  *  6. API integration (POST /api/agent, persist to research_sessions)
  */
 
+import "./setupTestDb.mjs";
 import assert from "node:assert/strict";
 import { validateAgentPanel, buildRepairPrompt, REPAIR_SYSTEM_PROMPT, RESEARCH_STATUS_VALUES } from "../src/server/schemas/agentPanel.js";
 import { parseUserContext, hasUserContext, missingContextFields, applyUserContextToMemory } from "../src/server/services/userContext.js";

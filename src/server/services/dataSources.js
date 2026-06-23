@@ -10,8 +10,9 @@
 import { withTimeout } from "../utils/async.js";
 import { getMarketSnapshot } from "../../marketData.js";
 import { getNewsSnapshot } from "../../newsData.js";
-import { getFinancials, getAnalystEstimates, getCompanyProfile, getDividendHistory } from "../../financialData.js";
+import { getFinancials, getAnalystEstimates, getCompanyProfile, getDividendHistory, getRevenueSegments } from "../../financialData.js";
 import { getRecentFilings } from "../../filingData.js";
+import { isUS } from "../../market.js";
 import { saveMarketSnapshot } from "../../db/index.js";
 
 export function fallbackMarketSnapshot(ticker, reason = "timeout") {
@@ -70,19 +71,30 @@ export async function collectDataSources({ company, suppliedMarketSnapshot = nul
     withTimeout(getAnalystEstimates(company.ticker), 4000, { providerStatus: "missing", errors: ["评级请求超时"], asOf: new Date().toISOString() }),
     needsProfileLookup
       ? withTimeout(getCompanyProfile(company.ticker), 4000, null)
-      : Promise.resolve(null)
+      : Promise.resolve(null),
+    // Revenue segmentation (cloud / AI / product lines) — US only, best-effort.
+    isUS(company.ticker)
+      ? withTimeout(getRevenueSegments(company.ticker), 6000, { providerStatus: "missing" })
+      : Promise.resolve({ providerStatus: "missing" })
   ]);
 
-  const [market, news, financials, filings, estimates, profileResult] = tasks;
+  const [market, news, financials, filings, estimates, profileResult, segmentsResult] = tasks;
   const marketSnapshot = market.status === "fulfilled" ? market.value : fallbackMarketSnapshot(company.ticker, market.reason?.message || "行情失败");
   // Cache successful snapshots
   if (marketSnapshot.providerStatus === "ok") {
     try { saveMarketSnapshot(marketSnapshot); } catch {}
   }
+  // Attach segment revenue onto the financials object so it rides along everywhere
+  // financialsData flows (prompt live-financials block, report, etc.).
+  const financialsData = financials.status === "fulfilled" ? financials.value : { providerStatus: "missing", errors: [financials.reason?.message || "财务失败"] };
+  const segments = segmentsResult?.status === "fulfilled" ? segmentsResult.value : null;
+  if (financialsData?.providerStatus === "ok" && segments?.providerStatus === "ok") {
+    financialsData.segments = segments;
+  }
   return {
     marketSnapshot: market.status === "fulfilled" ? market.value : fallbackMarketSnapshot(company.ticker, market.reason?.message || "行情失败"),
     newsSnapshot: news.status === "fulfilled" ? news.value : fallbackNewsSnapshot(company, news.reason?.message || "新闻失败"),
-    financialsData: financials.status === "fulfilled" ? financials.value : { providerStatus: "missing", errors: [financials.reason?.message || "财务失败"] },
+    financialsData,
     filingsData: filings.status === "fulfilled" ? filings.value : { providerStatus: "missing", filings: [], errors: [filings.reason?.message || "公告失败"] },
     estimatesData: estimates.status === "fulfilled" ? estimates.value : { providerStatus: "missing", errors: [estimates.reason?.message || "评级失败"] },
     companyProfile: profileResult?.status === "fulfilled" ? profileResult.value : null,

@@ -3,6 +3,7 @@ import { companies, companyByTicker } from "../../data.js";
 import { classifyResearchIntent, RESEARCH_INTENTS } from "./intentClassifier.js";
 import { webEvidenceToPrompt } from "./webEvidenceService.js";
 import { computeFinancialQuality } from "./financialQuality.js";
+import { financialsToMarkdown } from "../../financialData.js";
 
 const COMPETITOR_MAP = {
   "0992.HK": [
@@ -584,13 +585,20 @@ export function buildChatPrompt(question, panel, dataSources = {}, context = {})
   const competitorMode = isCompetitorQuestion(question);
   const financialMode = isFinancialQualityQuestion(question);
   const falsifyMode = isFalsifyQuestion(question);
-  const fq = computeFinancialQuality(context.financialsData || null, {
-    marketCap: context.marketSnapshot?.marketCap,
-    pe: context.marketSnapshot?.pe
-  });
-  const liveFinancials = Array.isArray(fq.metrics) && fq.metrics.length
-    ? fq.metrics.map((m) => `${m.name}=${m.display}`).join("；")
-    : "完整三表暂未核到（仅本地档案口径）";
+  const hasLiveFin = context.financialsData?.providerStatus === "ok";
+  // Real three-statement data (US via FMP) is the single source of truth for any
+  // financial number — foreground it so the model stops reasoning from the seed archive.
+  const liveFinancialsBlock = hasLiveFin
+    ? financialsToMarkdown(context.financialsData)
+    : (() => {
+        const fq = computeFinancialQuality(context.financialsData || null, {
+          marketCap: context.marketSnapshot?.marketCap,
+          pe: context.marketSnapshot?.pe
+        });
+        return Array.isArray(fq.metrics) && fq.metrics.length
+          ? fq.metrics.map((m) => `${m.name}=${m.display}`).join("；")
+          : "完整三表暂未核到（仅本地档案口径）";
+      })();
   const competitorCandidates = competitorSetFor(profile || { ticker: panel.ticker })
     .map((item) => `- ${item.name}${item.ticker ? `（${item.ticker}）` : ""}：${item.angle}。${item.note}`)
     .join("\n") || "本地档案暂缺";
@@ -611,14 +619,16 @@ ${drivers}
 
 已接入数据：${connected}
 缺失数据：${missing}
-行情：${dataSources.market?.provider || panel.price?.source || "缺失"}，${panel.price?.value || "缺失"}
+行情：${dataSources.market?.provider || panel.price?.source || "缺失"}，${panel.price?.value || "缺失"}${panel.price?.change && panel.price.change !== "暂不可用" ? `（${panel.price.change}）` : ""}${panel.price?.timestamp ? `，截至 ${panel.price.timestamp}` : ""}
 来源候选：
 ${sources}
-本地公司档案：
+${hasLiveFin
+    ? `已核到的实时财报（来源 ${context.financialsData.source}${context.financialsData.period ? ` · 截至 ${context.financialsData.period}` : ""}）——本轮所有财务数字的唯一事实源：\n${liveFinancialsBlock}`
+    : `实时财报：${liveFinancialsBlock}`}
+本地公司档案（定性参考，不能当财务数字来源）：
 - 护城河：${moat}
 - 商业模式：${businessModel}
-- 财务观察（本地档案）：${profileMetrics}
-- 已核到的实时财务口径：${liveFinancials}
+- 财务观察（定性，非实时）：${profileMetrics}
 - 估值区间（与前端可视化口径一致，回答涉及估值/赔率时必须对齐，禁止给出与之矛盾的目标价）：${valuationPromptLine(context.valuation)}
 - Bull：${bull}
 - Bear：${bear}
@@ -636,6 +646,7 @@ ${webEvidencePrompt}
 - 保持像真实投研对话，不要写成产品说明，不要说“我将/我会获取”。
 - ${businessMode ? "用户问的是靠什么赚钱/商业模式/收入来源。只回答这个问题，段落用：简单说、拆开看、关键判断、主要风险、来源。不要输出完整研究模板。" : competitorMode ? "用户问的是竞争对手/竞品/竞争格局。只回答竞争格局，段落用：简单结论、主要竞争对手、怎么理解竞争格局、我的判断、接下来重点看、来源。不要输出完整研究模板，不要写估值/动作大模板。" : moatMode ? "用户问的是护城河/竞争优势。只围绕护城河回答，段落用：结论、护城河拆解、商业模式、我的判断、风险 / 证伪、下一步看什么、来源。不要输出完整行情模板。" : financialMode ? "用户问的是赚不赚钱/盈利质量/利润/现金流。只回答财务质量，段落用：我的判断、靠什么赚钱、利润质量、现金流、主要风险、下一步看什么、来源。先给判断再讲依据，优先使用上面‘已核到的实时财务口径’，缺数据只说一句、放到末尾，不要输出完整研究模板。" : falsifyMode ? "用户问的是什么情况会证伪/会推翻逻辑。只回答证伪，段落用：我的判断、会推翻逻辑的关键事实、怎么提前观察、来源。先点明当前多头逻辑成立的前提，再列出哪些事实出现就要重估，使用 Bull/Bear/监控项档案，不要输出完整研究模板。" : "必须包含这些段落，顺序固定：结论、事实、推断、估值 / 风险、动作、证伪条件、我的判断、还缺什么（折叠在末尾、只影响置信度）、来源。"}
 - “事实”尽量编号，引用当前可用数据；不能编造具体数值。若某项缺失，写“当前未核到/来源缺失”，但继续给推断。
+- 凡涉及收入/利润/利润率/现金流/EPS/回购分红的具体数字，只能引用上面“已核到的实时财报”块；本地档案只提供定性判断（护城河/商业模式/多空逻辑），不得作为财务数字来源。${hasLiveFin ? "本轮已有实时财报，必须用真实数字支撑财务判断，不要再写“未核到完整三表/仅本地档案口径”。" : "本轮无实时财报，财务判断用研究语言说明置信度，不要编造数字。"}
 - 不要使用“暂不评分”“完整度xx%”“需要补充材料”“未接入”这种产品状态词，改成研究语言：当前未核到、置信度下降。
 - “还缺什么”只在末尾出现一段，且只说还缺哪些事实会提高置信度（如完整三表、最新公告、一致预期），不要写产品后台/数据源厂商名字，不要让缺口抢正文。
 - “推断”必须是全回答的信息密度最高部分，不能少于 4 个自然段；必须依次讲：赚钱机制、护城河是否能转成利润、财务兑现路径、估值重估变量。必须使用上面的本地公司档案，不能只写“第一层/第二层”的空框架。
@@ -657,7 +668,10 @@ function valuationPromptLine(valuation) {
   const bull = parseFloat(valuation.bull);
   const bear = parseFloat(valuation.bear);
   const odds = price && bull && bear && price > bear ? ((bull - price) / (price - bear)).toFixed(1) : null;
-  return `方法 ${valuation.method}；看空 ${valuation.bear} / 中性 ${valuation.base} / 看多 ${valuation.bull}，现价 ${valuation.currentPrice}${odds ? `，回报:风险赔率约 ${odds}:1` : ""}。`;
+  const analyst = valuation.analyst?.target
+    ? `；分析师一致目标价 ${valuation.analyst.target}${valuation.analyst.upside ? `（较现价 ${valuation.analyst.upside}）` : ""}${valuation.analyst.low && valuation.analyst.high ? `，区间 ${valuation.analyst.low}~${valuation.analyst.high}` : ""}`
+    : "";
+  return `方法 ${valuation.method}；看空 ${valuation.bear} / 中性 ${valuation.base} / 看多 ${valuation.bull}，现价 ${valuation.currentPrice}${odds ? `，回报:风险赔率约 ${odds}:1` : ""}${analyst}。`;
 }
 
 export function mergeEvidenceIntoPanel(panel, webEvidence) {
@@ -695,13 +709,18 @@ export function buildReportPrompt(question, panel, dataSources = {}, context = {
   const bull = profile?.bull?.join("；") || "本地档案暂缺";
   const bear = profile?.bear?.join("；") || "本地档案暂缺";
   const monitors = profile?.monitors?.join("、") || "收入增速、利润率、自由现金流、回购/分红";
-  const fq = computeFinancialQuality(context.financialsData || null, {
-    marketCap: context.marketSnapshot?.marketCap,
-    pe: context.marketSnapshot?.pe
-  });
-  const liveFinancials = Array.isArray(fq.metrics) && fq.metrics.length
-    ? fq.metrics.map((m) => `${m.name}=${m.display}`).join("；")
-    : "完整三表暂未核到（以本地档案与商业逻辑为主）";
+  const hasLiveFin = context.financialsData?.providerStatus === "ok";
+  const liveFinancialsBlock = hasLiveFin
+    ? financialsToMarkdown(context.financialsData)
+    : (() => {
+        const fq = computeFinancialQuality(context.financialsData || null, {
+          marketCap: context.marketSnapshot?.marketCap,
+          pe: context.marketSnapshot?.pe
+        });
+        return Array.isArray(fq.metrics) && fq.metrics.length
+          ? fq.metrics.map((m) => `${m.name}=${m.display}`).join("；")
+          : "完整三表暂未核到（以本地档案与商业逻辑为主）";
+      })();
   const competitorCandidates = competitorSetFor(profile || { ticker: panel.ticker })
     .map((item) => `- ${item.name}${item.ticker ? `（${item.ticker}）` : ""}：${item.angle}`)
     .join("\n") || "本地档案暂缺";
@@ -714,10 +733,12 @@ export function buildReportPrompt(question, panel, dataSources = {}, context = {
 当前价格口径：${price}（来源 ${panel.price?.source || dataSources.market?.provider || "公开行情"}）
 一句话判断（参考，可改写）：${panel.oneLineView || ""}
 
-公司档案：
+${hasLiveFin
+    ? `已核到的实时财报（来源 ${context.financialsData.source}${context.financialsData.period ? ` · 截至 ${context.financialsData.period}` : ""}）——本报告所有财务数字的唯一事实源：\n${liveFinancialsBlock}\n`
+    : `实时财报：${liveFinancialsBlock}\n`}
+公司档案（定性参考，不能当财务数字来源）：
 - 护城河：${moat}
 - 商业模式：${businessModel}
-- 已核到的实时财务口径：${liveFinancials}
 - 估值区间（与前端可视化口径一致，回答涉及估值/赔率时必须对齐，禁止给出与之矛盾的目标价）：${valuationPromptLine(context.valuation)}
 - Bull：${bull}
 - Bear：${bear}

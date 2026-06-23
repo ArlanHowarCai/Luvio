@@ -183,6 +183,60 @@ async function fetchFmpDividendHistory(ticker) {
   };
 }
 
+// ─── FMP 分部收入（产品/业务线，对标 HoneClaw 的分部数据） ────────────
+
+/**
+ * Normalize FMP revenue-segmentation into { period, total, segments[] } (pure).
+ * Tolerates both the newer flat shape ({ data: { seg: val } }) and the older
+ * nested shape ([{ "2024-09-28": { seg: val } }]).
+ */
+export function normalizeSegments(raw) {
+  const list = Array.isArray(raw) ? raw : [];
+  if (!list.length) return null;
+  const latest = list[0];
+  let period = "";
+  let data = null;
+  if (latest && typeof latest.data === "object" && latest.data) {
+    data = latest.data;
+    period = latest.date || (latest.fiscalYear ? `${latest.fiscalYear} ${latest.period || ""}`.trim() : "");
+  } else if (latest && typeof latest === "object") {
+    const key = Object.keys(latest).find((k) => latest[k] && typeof latest[k] === "object");
+    if (key) { data = latest[key]; period = key; }
+  }
+  if (!data) return null;
+  const entries = Object.entries(data)
+    .map(([name, value]) => ({ name, value: Number(value) }))
+    .filter((s) => Number.isFinite(s.value) && s.value !== 0);
+  if (!entries.length) return null;
+  const total = entries.reduce((sum, s) => sum + Math.abs(s.value), 0);
+  entries.sort((a, b) => b.value - a.value);
+  return {
+    period,
+    total,
+    segments: entries.slice(0, 8).map((s) => ({
+      name: s.name,
+      value: s.value,
+      pct: total ? Math.round((s.value / total) * 100) : null
+    }))
+  };
+}
+
+async function fetchFmpSegments(ticker) {
+  const symbol = toFmpSymbol(ticker);
+  const raw = await fmpGet(
+    "/stable/revenue-product-segmentation",
+    { symbol, period: "annual", structure: "flat" },
+    { ttl: FMP_TTL.financials, timeoutMs: 8000 }
+  );
+  const norm = normalizeSegments(raw);
+  if (!norm) throw new Error("FMP 没有返回分部收入");
+  return { source: "FMP", ticker: normalizeTicker(ticker), ...norm, providerStatus: "ok", asOf: new Date().toISOString() };
+}
+
+export async function getRevenueSegments(ticker) {
+  return tryProviders([() => fetchFmpSegments(ticker)]);
+}
+
 // ─── Finnhub (扩展已有 key) ──────────────────────────────────────────
 
 async function fetchFinnhubFinancials(ticker) {
@@ -492,6 +546,12 @@ export function financialsToMarkdown(financials) {
   const fmtCompact = (value) => (value !== null && value !== undefined ? compactNumber(value) : "缺失");
   const period = financials.period ? `（${financials.period}）` : "";
 
+  const seg = financials.segments?.segments?.length
+    ? `\n分部收入（${financials.segments.period || "最新期"}，来源 ${financials.segments.source || "FMP"}）：\n${financials.segments.segments
+        .map((s) => `- ${s.name}：${compactNumber(s.value)}${s.pct != null ? `（占 ${s.pct}%）` : ""}`)
+        .join("\n")}`
+    : "";
+
   return [
     `财务数据来源：${financials.source}${period}`,
     `收入：${fmtCompact(financials.revenue)} | 增速：${fmt(financials.revenueGrowth, "%")}`,
@@ -511,7 +571,7 @@ export function financialsToMarkdown(financials) {
     financials.debtToEquity ? `资产负债率：${financials.debtToEquity}` : "",
     financials.returnOnEquity ? `ROE：${fmtPercent(financials.returnOnEquity)}` : "",
     financials.returnOnAssets ? `ROA：${fmtPercent(financials.returnOnAssets)}` : ""
-  ].filter(Boolean).join("\n");
+  ].filter(Boolean).join("\n") + seg;
 }
 
 export function companyProfileToMarkdown(profile) {

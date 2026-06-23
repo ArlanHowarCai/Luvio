@@ -1,4 +1,6 @@
 import { normalizeTicker, companyByTicker } from "./data.js";
+import { isUS } from "./market.js";
+import { getUsFilings } from "./secFilings.js";
 
 function toStockCode(ticker) {
   return normalizeTicker(ticker).replace(".HK", "");
@@ -165,6 +167,9 @@ function decodeHtmlEntities(text = "") {
  * 统一出口：获取最近公告
  */
 export async function getRecentFilings(ticker) {
+  // US tickers go to SEC EDGAR (8-K / 10-Q / 10-K); HK stays on HKEX 披露易.
+  if (isUS(ticker)) return getUsFilings(ticker);
+
   const providers = [fetchHkexNewsFilings, fetchFilingsViaSearch];
   const errors = [];
 
@@ -199,7 +204,7 @@ export async function getRecentFilings(ticker) {
  */
 export function filingsToMarkdown(filingsData) {
   if (!filingsData || filingsData.providerStatus !== "ok") {
-    return "HKEX 公告：暂未取得可用公告。模型不能编造公告内容。";
+    return "公告（HKEX 披露易 / SEC EDGAR）：暂未取得可用公告。模型不能编造公告内容。";
   }
 
   const items = filingsData.filings

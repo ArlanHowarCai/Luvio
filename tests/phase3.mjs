@@ -1,3 +1,4 @@
+import "./setupTestDb.mjs";
 import assert from "node:assert/strict";
 import { computeFinancialQuality } from "../src/server/services/financialQuality.js";
 import { computeValuation } from "../src/server/services/valuationEngine.js";

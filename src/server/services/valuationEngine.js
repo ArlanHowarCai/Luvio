@@ -36,9 +36,12 @@ import { compactNumberServer } from "../utils/format.js";
  * visualization is never misleading. Returns cannotValueReason when even a band
  * can't be built.
  */
-export function displayValuation(company, marketSnapshot, financialsData) {
+export function displayValuation(company, marketSnapshot, financialsData, estimates = null) {
   const v = computeValuation(company, marketSnapshot, financialsData);
   const price = parseFloat(v.currentPrice);
+  // Analyst consensus is attached as an independent anchor whenever available —
+  // it enriches even a coherent fundamental band (US gets real targets via FMP).
+  const analyst = analystAnchor(estimates, price);
   const bear = parseFloat(v.bear);
   const bull = parseFloat(v.bull);
   const coherent =
@@ -47,9 +50,35 @@ export function displayValuation(company, marketSnapshot, financialsData) {
     bear > 0 &&
     bear < price &&
     price < bull;
-  if (coherent) return v;
+  if (coherent) return analyst ? { ...v, analyst } : v;
 
-  const p = marketSnapshot?.price ?? company?.price;
+  const p = numOrNull(marketSnapshot?.price ?? company?.price);
+  // Prefer a real analyst target band over the mechanical ±25% band: this is what
+  // replaces the self-circular "中性 = 现价" valuation when consensus exists.
+  if (p && estimates) {
+    const lo = numOrNull(estimates.targetLow);
+    const hi = numOrNull(estimates.targetHigh);
+    const mid = numOrNull(estimates.consensusTargetPrice) ?? numOrNull(estimates.targetMedian);
+    if (lo && hi && lo < hi) {
+      // Bracket the current price so the visualization bar stays coherent even
+      // when every analyst target sits above (or below) the quote.
+      const bearV = Math.min(lo, p * 0.95);
+      const bullV = Math.max(hi, p * 1.05);
+      return {
+        method: "分析师目标价区间",
+        bear: bearV.toFixed(2),
+        base: (mid ?? p).toFixed(2),
+        bull: bullV.toFixed(2),
+        currentPrice: p,
+        methods: ["分析师目标价区间"],
+        keyAssumptions: [`基于分析师一致目标价：低 ${lo} / 中 ${mid ?? "—"} / 高 ${hi}（来源 ${estimates.source || "评级源"}）`],
+        sensitivity: [],
+        analyst,
+        cannotValueReason: null
+      };
+    }
+  }
+
   // Prefer a quoted PE; otherwise derive it from real EPS (US data via FMP) so a
   // self-consistent band still renders.
   let pe = marketSnapshot?.pe ?? company?.pe;
@@ -65,10 +94,25 @@ export function displayValuation(company, marketSnapshot, financialsData) {
       methods: ["PE 区间"],
       keyAssumptions: [`基于现价与 PE ${pe}x 的估值带（约 ±25%，反映 PE 收缩/扩张）`],
       sensitivity: [],
+      analyst,
       cannotValueReason: null
     };
   }
-  return { ...v, cannotValueReason: v.cannotValueReason || "缺少自洽的估值口径。" };
+  return { ...v, analyst, cannotValueReason: v.cannotValueReason || "缺少自洽的估值口径。" };
+}
+
+function numOrNull(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+/** Distill analyst consensus into a compact anchor with upside-to-target. */
+function analystAnchor(estimates, price) {
+  if (!estimates || estimates.providerStatus !== "ok") return null;
+  const target = numOrNull(estimates.consensusTargetPrice) ?? numOrNull(estimates.targetMedian);
+  if (!target) return null;
+  const upside = Number.isFinite(price) && price > 0 ? `${((target - price) / price * 100).toFixed(1)}%` : null;
+  return { target, low: numOrNull(estimates.targetLow), high: numOrNull(estimates.targetHigh), upside, source: estimates.source || "评级源" };
 }
 
 export function computeValuation(company, marketSnapshot, financialsData) {
