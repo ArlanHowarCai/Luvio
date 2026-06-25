@@ -117,7 +117,7 @@ body {
     linear-gradient(180deg, #101216 0%, #0c0d10 100%);
 }
 
-/* Dark-mode patches for the few dark-on-dark gradients. */
+/* Dark-mode patches for the few hardcoded-light surfaces (chrome + gradients). */
 [data-theme="dark"] .empty-chat h2 {
   background: linear-gradient(162deg, #f4f4f6 28%, #a9aab2);
   -webkit-background-clip: text;
@@ -126,6 +126,35 @@ body {
 [data-theme="dark"] .message.user .bubble {
   background: linear-gradient(180deg, #2c2f37, #23252b);
   box-shadow: var(--sh-2), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+/* Top chrome — the bar was a hardcoded light frosted panel. */
+[data-theme="dark"] .topbar {
+  background: rgba(18, 19, 23, 0.72);
+  border-bottom-color: rgba(255, 255, 255, 0.08);
+}
+[data-theme="dark"] .brand span {
+  background: linear-gradient(150deg, #2f323a, #3c3f47);
+  box-shadow: var(--sh-1), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+/* Bottom chrome — composer fade + panel highlight were light; send button blended. */
+[data-theme="dark"] .composer {
+  background: linear-gradient(180deg, rgba(12, 13, 16, 0) 0%, rgba(12, 13, 16, 0.92) 32%, #0c0d10 70%);
+}
+[data-theme="dark"] .composer-panel {
+  box-shadow: var(--sh-3), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+[data-theme="dark"] .composer-panel:focus-within {
+  box-shadow: var(--sh-4), 0 0 0 4px rgba(59, 141, 255, 0.16);
+}
+[data-theme="dark"] .send-button {
+  background: linear-gradient(180deg, #4a93ff, #2f7ae6);
+  box-shadow: var(--sh-2), inset 0 1px 0 rgba(255, 255, 255, 0.2);
+}
+/* Primary CTA ("新建研究") — dark gradient on dark needs a defining edge. */
+[data-theme="dark"] .primary {
+  background: linear-gradient(180deg, #2e313a, #24262c);
+  border-color: rgba(255, 255, 255, 0.12);
+  box-shadow: var(--sh-2), inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
 
 button,
@@ -164,6 +193,17 @@ a {
 }
 *::-webkit-scrollbar-thumb:hover {
   background: rgba(0, 0, 0, 0.28);
+  background-clip: padding-box;
+}
+[data-theme="dark"] * {
+  scrollbar-color: rgba(255, 255, 255, 0.22) transparent;
+}
+[data-theme="dark"] *::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.18);
+  background-clip: padding-box;
+}
+[data-theme="dark"] *::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.3);
   background-clip: padding-box;
 }
 
@@ -461,6 +501,9 @@ button:disabled {
 
 .history-toggle:hover {
   background: rgba(0, 0, 0, 0.04);
+}
+[data-theme="dark"] .history-toggle:hover {
+  background: rgba(255, 255, 255, 0.05);
 }
 
 .history-toggle.is-open {
