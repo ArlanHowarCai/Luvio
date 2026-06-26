@@ -1,4 +1,5 @@
 import { normalizeTicker } from "./data.js";
+import { finnhubSymbol, detectMarket } from "./market.js";
 
 const POSITIVE_WORDS = [
   "beat",
@@ -299,6 +300,41 @@ function searchPlanFor(company, missing) {
   });
 }
 
+// Finnhub /company-news：免费、带 Key、稳定，返回近一个月真实公司新闻（标题/摘要/
+// 时间/来源）。作为新闻的主源——之前只靠 Yahoo/Bing 抓取，常被反爬挡掉返回空，体感
+// 就是"新闻源不可用"。Finnhub 兜底后即使抓取源全挂也仍有新闻。免费档只覆盖美股。
+async function fetchFinnhubCompanyNews(company) {
+  const apiKey = process.env.FINNHUB_API_KEY || "";
+  if (!apiKey) throw new Error("missing FINNHUB_API_KEY");
+  if (detectMarket(company.ticker) !== "US") throw new Error("Finnhub 公司新闻仅覆盖美股");
+  const symbol = finnhubSymbol(company.ticker);
+  const day = 86400000;
+  const to = new Date();
+  const from = new Date(to.getTime() - 30 * day);
+  const fmt = (d) => d.toISOString().slice(0, 10);
+  const url = `https://finnhub.io/api/v1/company-news?symbol=${encodeURIComponent(symbol)}&from=${fmt(from)}&to=${fmt(to)}&token=${apiKey}`;
+  const raw = await fetchText(url, 6000);
+  let rows;
+  try {
+    rows = JSON.parse(raw);
+  } catch {
+    throw new Error("Finnhub 公司新闻返回非 JSON");
+  }
+  const articles = (Array.isArray(rows) ? rows : [])
+    .filter((a) => a.headline && a.url)
+    .slice(0, 20)
+    .map((a) => ({
+      title: a.headline,
+      description: a.summary || "",
+      url: a.url,
+      source: a.source ? `Finnhub · ${a.source}` : "Finnhub",
+      publishedAt: a.datetime ? new Date(a.datetime * 1000).toISOString() : "",
+      scope: "财经"
+    }));
+  if (!articles.length) throw new Error("Finnhub 没有返回公司新闻");
+  return articles;
+}
+
 async function fetchYahooFinanceNews(ticker) {
   const symbol = normalizeTicker(ticker);
   const url = `https://feeds.finance.yahoo.com/rss/2.0/headline?s=${encodeURIComponent(symbol)}&region=US&lang=en-US`;
@@ -358,6 +394,7 @@ async function fetchEastMoneyNews(companyName) {
 async function fetchBroadNews(company) {
   const enableGoogleNews = process.env.LUVIO_ENABLE_GOOGLE_NEWS === "1";
   const searchJobs = [
+    fetchFinnhubCompanyNews(company),   // 主源：稳定、带 Key（美股）
     fetchYahooFinanceNews(company.ticker),
     ...NEWS_SCOPES.map((scope) => fetchYahooSearchForScope(company, scope)),
     ...NEWS_SCOPES.map((scope) => fetchBingSignalsForScope(company, scope)),

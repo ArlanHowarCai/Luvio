@@ -48,10 +48,22 @@ function availableKeys(now = Date.now()) {
   return fmpKeyPool().filter((key) => (keyCooldownUntil.get(key) || 0) <= now);
 }
 
-/** 把 HTTP 状态映射到 Key 错误类型；null 表示不是 Key 问题（不切 Key）。 */
-function keyErrorKind(status) {
-  if (status === 401 || status === 403) return "auth";
-  if (status === 402 || status === 429) return "quota";
+// "这个端点要更高订阅档"的特征（FMP 免费档把财报三表等划成 premium/special endpoint）。
+// 命中说明只是该端点不可用，不是 Key 限额——绝不能因此把整个 Key 冷却掉，否则会连累
+// quote / profile / search 等还能正常用的免费端点（这正是"一查就全线不可用"的根因）。
+const PREMIUM_GATE_RE = /premium|special endpoint|exclusive endpoint|not available under your current subscription|upgrade your plan|legacy endpoint/i;
+
+/**
+ * 把 HTTP 状态 + 响应体映射到错误类型：
+ *   "endpoint_gated" 端点需更高套餐 → 本端点失败但不冷却 Key
+ *   "auth"           Key 无效/被拒   → 冷却 Key 一天
+ *   "quota"          限额/频率超限   → 冷却 Key 数小时
+ *   null             非 Key 问题
+ */
+function keyErrorKind(status, text = "") {
+  if (status === 402) return PREMIUM_GATE_RE.test(text) ? "endpoint_gated" : "quota";
+  if (status === 401 || status === 403) return PREMIUM_GATE_RE.test(text) ? "endpoint_gated" : "auth";
+  if (status === 429) return "quota";
   return null;
 }
 
@@ -103,7 +115,12 @@ export async function fmpGet(path, params = {}, { ttl = FMP_TTL.fast, timeoutMs 
       continue; // 网络错误/超时：换下一个 Key 再试
     }
 
-    const kind = keyErrorKind(result.status);
+    const kind = keyErrorKind(result.status, result.text);
+    if (kind === "endpoint_gated") {
+      // 端点需更高订阅档：所有 Key 都一样拿不到，没必要换 Key，更不能冷却 Key
+      // （否则连累其它免费端点）。直接抛，让调用方走下一个数据源（如 Finnhub）。
+      throw new Error(`FMP 端点需更高订阅档（${result.status}）：${path}`);
+    }
     if (kind) {
       keyCooldownUntil.set(key, now + (kind === "auth" ? AUTH_COOLDOWN_MS : QUOTA_COOLDOWN_MS));
       lastError = `${result.status} ${result.text.slice(0, 120)}`;

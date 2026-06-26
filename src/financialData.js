@@ -1,5 +1,5 @@
 import { normalizeTicker } from "./data.js";
-import { fmpSymbol, finnhubSymbol, tencentSymbol, hkCode } from "./market.js";
+import { fmpSymbol, finnhubSymbol, tencentSymbol, hkCode, detectMarket } from "./market.js";
 import { fmpGet, FMP_TTL } from "./fmpClient.js";
 
 function env(name) {
@@ -239,53 +239,69 @@ export async function getRevenueSegments(ticker) {
 
 // ─── Finnhub (扩展已有 key) ──────────────────────────────────────────
 
+// Finnhub 基本面。关键点：/stock/metric 在免费档可用（含 PE/EPS/利润率/ROE/增长等
+// 比率），是这里的主数据源；/stock/financials（绝对额三表）是付费端点，取得到就补充、
+// 取不到也不影响——之前把两者放进同一个 Promise.all，付费端点 403 直接把整段拖垮，
+// 白白丢掉了免费就能拿到的 EPS/PE/利润率（这正是"美股没有估值条、置信度低"的根因）。
 async function fetchFinnhubFinancials(ticker) {
   const apiKey = env("FINNHUB_API_KEY");
   if (!apiKey) throw new Error("missing FINNHUB_API_KEY");
   const symbol = finnhubSymbol(ticker);
 
-  const [financials, metrics] = await Promise.all([
-    fetchJson(`https://finnhub.io/api/v1/stock/financials?symbol=${encodeURIComponent(symbol)}&statement=ic&freq=annually&token=${apiKey}`, { timeoutMs: 6000 }),
-    fetchJson(`https://finnhub.io/api/v1/stock/metric?symbol=${encodeURIComponent(symbol)}&metric=all&token=${apiKey}`, { timeoutMs: 6000 })
-  ]);
+  const metrics = await fetchJson(
+    `https://finnhub.io/api/v1/stock/metric?symbol=${encodeURIComponent(symbol)}&metric=all&token=${apiKey}`,
+    { timeoutMs: 6000 }
+  );
+  const m = metrics?.metric || {};
+  if (!Object.keys(m).length) throw new Error("Finnhub 没有返回基础财务指标");
 
-  const annualData = financials?.financials?.[0];
-  const metricData = metrics?.metric || {};
-  const seriesData = metrics?.series?.annual || {};
+  // 付费端点：能拿到绝对额（营收/净利）就补充，拿不到就只用 metric 的比率。
+  let annual = null;
+  try {
+    const fin = await fetchJson(
+      `https://finnhub.io/api/v1/stock/financials?symbol=${encodeURIComponent(symbol)}&statement=ic&freq=annually&token=${apiKey}`,
+      { timeoutMs: 6000 }
+    );
+    annual = fin?.financials?.[0] || null;
+  } catch { /* 付费端点不可用：跳过绝对额 */ }
 
-  if (!annualData && !Object.keys(metricData).length) throw new Error("Finnhub 没有返回财务数据");
-
-  const revenue = numberOrNull(annualData?.revenue || metricData.revenueGrowth5Y ? null : null);
-  const netIncome = numberOrNull(annualData?.netIncome || null);
-  const grossMargin = numberOrNull(metricData.grossMargin || annualData?.grossMargin);
-  const operatingMargin = numberOrNull(metricData.operatingMargin || annualData?.operatingMargin);
-  const revenueGrowth = numberOrNull(metricData.revenueGrowthQ || metricData.revenueGrowthTTM || metricData["5YRevenueGrowthPerShare"]);
-  const profitGrowth = numberOrNull(metricData.netIncomeGrowth5Y || metricData.netMarginGrowth5Y);
+  const pick = (...vals) => {
+    for (const v of vals) {
+      const n = numberOrNull(v);
+      if (n !== null) return n;
+    }
+    return null;
+  };
 
   return {
     source: "Finnhub",
     ticker: normalizeTicker(ticker),
-    period: annualData?.period || "",
-    currency: "HKD",
-    revenue,
-    revenueGrowth,
-    grossMargin,
-    operatingMargin,
-    netIncome,
-    netMargin: numberOrNull(metricData.netMargin || annualData?.netMargin),
-    profitGrowth,
-    eps: numberOrNull(metricData.epsInclExtraItemsTTM || annualData?.eps),
-    freeCashFlow: numberOrNull(metricData.freeCashFlowPerShareTTM ? metricData.freeCashFlowPerShareTTM : null),
-    forwardPE: numberOrNull(metricData.forwardPE),
-    pe: numberOrNull(metricData.peNormalizedAnnual || metricData.peInclExtraTTM || metricData.peExclExtraTTM),
-    peRatio: numberOrNull(metricData.peRatio),
-    pegRatio: numberOrNull(metricData.pegRatio),
-    dividendYield: numberOrNull(metricData.dividendYieldIndicatedAnnual),
-    currentRatio: numberOrNull(metricData.currentRatio),
-    quickRatio: numberOrNull(metricData.quickRatio),
-    debtToEquity: numberOrNull(metricData.totalDebtToEquity || metricData.totalDebtToTotalAssets),
-    returnOnEquity: numberOrNull(metricData.roeTTM || metricData.returnOnEquity),
-    returnOnAssets: numberOrNull(metricData.roaTTM || metricData.returnOnAssets),
+    period: annual?.period || "TTM",
+    currency: detectMarket(ticker) === "US" ? "USD" : "HKD",
+    revenue: pick(annual?.revenue),
+    revenueGrowth: pick(m.revenueGrowthTTMYoy, m.revenueGrowthQuarterlyYoy, m.revenueGrowth5Y),
+    grossProfit: pick(annual?.grossIncome),
+    grossMargin: pick(m.grossMarginTTM, m.grossMarginAnnual, m.grossMargin5Y),
+    operatingIncome: pick(annual?.operatingIncome),
+    operatingMargin: pick(m.operatingMarginTTM, m.operatingMarginAnnual, m.operatingMargin5Y),
+    netIncome: pick(annual?.netIncome),
+    netMargin: pick(m.netProfitMarginTTM, m.netProfitMarginAnnual, m.netProfitMargin5Y),
+    profitGrowth: pick(m.epsGrowthTTMYoy, m.epsGrowth5Y, m.netMarginGrowth5Y),
+    eps: pick(m.epsTTM, m.epsInclExtraItemsTTM, m.epsAnnual),
+    pe: pick(m.peTTM, m.peInclExtraTTM, m.peNormalizedAnnual, m.peBasicExclExtraTTM),
+    forwardPE: pick(m.forwardPE),
+    ps: pick(m.psTTM, m.psAnnual),
+    pb: pick(m.pbQuarterly, m.pbAnnual, m.pb),
+    bookValuePerShare: pick(m.bookValuePerShareQuarterly, m.bookValuePerShareAnnual),
+    cashFlowPerShare: pick(m.cashFlowPerShareTTM, m.cashFlowPerShareAnnual),
+    dividendYield: pick(m.currentDividendYieldTTM, m.dividendYieldIndicatedAnnual),
+    currentRatio: pick(m.currentRatioQuarterly, m.currentRatioAnnual),
+    debtToEquity: pick(m["totalDebt/totalEquityQuarterly"], m["totalDebt/totalEquityAnnual"], m["longTermDebt/equityQuarterly"]),
+    returnOnEquity: pick(m.roeTTM, m.roeRfy, m.roe5Y),
+    returnOnAssets: pick(m.roaTTM, m.roaRfy, m.roa5Y),
+    beta: pick(m.beta),
+    week52High: pick(m["52WeekHigh"]),
+    week52Low: pick(m["52WeekLow"]),
     asOf: new Date().toISOString(),
     providerStatus: "ok"
   };
