@@ -4,14 +4,17 @@ How real-time and reference data flows through the system.
 
 ## Data tiers
 
+市场（HK/US）由 `src/market.js → detectMarket` 判定，决定每个 tier 用哪个 provider 及 symbol 拼法。
+
 | Tier | Data | Source | Frequency | Storage |
 |------|------|--------|-----------|---------|
-| **Tier 0** | Company universe (ticker, name, sector) | `src/data/hkStocks.js` + seed script | One-time (re-seed on update) | `luvio.db → companies` |
-| **Tier 1** | Detail profiles (summary, risks, moat, etc.) | `src/data.js` (detailOverrides) | Per-profile, as authored | `luvio.db → company_details` |
-| **Tier 2** | Market data (price, PE, volume, etc.) | External APIs (FMP, Tencent Finance, etc.) | On-demand, cached per ticker | `luvio.db → market_snapshots` |
-| **Tier 3** | Financial statements | Financial Modeling Prep API | On-demand | In-memory (via `src/financialData.js`) |
-| **Tier 4** | News & filings | External APIs | On-demand | In-memory (via `src/newsData.js`) |
-| **Tier 5** | User research sessions | Agent output + user input | Per conversation | `luvio.db → research_sessions` + localStorage |
+| **Tier 0** | Company universe (ticker, name, sector) | `src/data/hkStocks.js` + seed（港股）；美股按 ticker 即时建档 | One-time / on-demand | `luvio.db → companies` |
+| **Tier 1** | Detail profiles (summary, risks, moat) | `src/data.js`（港股精选档案） | Per-profile | `luvio.db → company_details` |
+| **Tier 2** | Market data (price, PE, currency) | 港股 Tencent；美股 Finnhub/Alpha Vantage/Yahoo | On-demand, cached | `luvio.db → market_snapshots` |
+| **Tier 3** | Financial statements | **美股 FMP `/stable`（真三表）**；港股回退腾讯/Yahoo 基础 | On-demand | In-memory (`src/financialData.js`) |
+| **Tier 4** | Web evidence | Tavily / SerpAPI →（无 key）DuckDuckGo/Yahoo/Bing；URL 校验+正文抽取+可信度 | On-demand, cached | `luvio.db → web_evidence` |
+| **Tier 5** | News & filings | External APIs / HKEX | On-demand | In-memory |
+| **Tier 6** | Research sessions | Single-pass chat output | Per conversation | `luvio.db → research_sessions` + localStorage |
 
 ## Current data flow
 

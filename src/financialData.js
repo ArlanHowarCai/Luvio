@@ -1,11 +1,13 @@
 import { normalizeTicker } from "./data.js";
+import { fmpSymbol, finnhubSymbol, tencentSymbol, hkCode, detectMarket } from "./market.js";
+import { fmpGet, FMP_TTL } from "./fmpClient.js";
 
 function env(name) {
   return process.env[name] || "";
 }
 
 function toHongKongSymbol(ticker) {
-  return normalizeTicker(ticker).replace(".HK", "");
+  return hkCode(ticker).replace(/^0+(?=\d)/, "");
 }
 
 function numberOrNull(value) {
@@ -46,19 +48,15 @@ async function fetchJson(url, options = {}) {
 // ─── Financial Modeling Prep ──────────────────────────────────────────
 
 function toFmpSymbol(ticker) {
-  const symbol = toHongKongSymbol(ticker);
-  return `${symbol}.HK`;
+  return fmpSymbol(ticker);
 }
 
 async function fetchFmpFinancials(ticker) {
-  const apiKey = env("FMP_API_KEY");
-  if (!apiKey) throw new Error("missing FMP_API_KEY");
   const symbol = toFmpSymbol(ticker);
-
   const [incomeStmt, balanceSheet, cashFlow] = await Promise.all([
-    fetchJson(`https://financialmodelingprep.com/api/v3/income-statement/${encodeURIComponent(symbol)}?limit=2&apikey=${apiKey}`, { timeoutMs: 6000 }),
-    fetchJson(`https://financialmodelingprep.com/api/v3/balance-sheet-statement/${encodeURIComponent(symbol)}?limit=2&apikey=${apiKey}`, { timeoutMs: 6000 }),
-    fetchJson(`https://financialmodelingprep.com/api/v3/cash-flow-statement/${encodeURIComponent(symbol)}?limit=2&apikey=${apiKey}`, { timeoutMs: 6000 })
+    fmpGet("/stable/income-statement", { symbol, limit: 2 }, { ttl: FMP_TTL.financials, timeoutMs: 10000 }),
+    fmpGet("/stable/balance-sheet-statement", { symbol, limit: 2 }, { ttl: FMP_TTL.financials, timeoutMs: 10000 }),
+    fmpGet("/stable/cash-flow-statement", { symbol, limit: 2 }, { ttl: FMP_TTL.financials, timeoutMs: 10000 })
   ]);
 
   if (!incomeStmt?.length) throw new Error("FMP 没有返回利润表数据");
@@ -86,6 +84,7 @@ async function fetchFmpFinancials(ticker) {
     netMargin: latest.revenue ? numberOrNull((latest.netIncome / latest.revenue) * 100) : null,
     profitGrowth: numberOrNull(profitGrowth),
     eps: numberOrNull(latest.eps),
+    sharesOutstanding: numberOrNull(latest.weightedAverageShsOutDil ?? latest.weightedAverageShsOut),
     totalAssets: numberOrNull(latestBs.totalAssets),
     totalLiabilities: numberOrNull(latestBs.totalLiabilities),
     totalDebt: numberOrNull(latestBs.totalDebt),
@@ -95,19 +94,16 @@ async function fetchFmpFinancials(ticker) {
     operatingCashFlow: numberOrNull(latestCf.operatingCashFlow),
     freeCashFlow: numberOrNull(latestCf.freeCashFlow),
     capitalExpenditure: numberOrNull(latestCf.capitalExpenditure),
-    dividendPaid: numberOrNull(latestCf.dividendsPaid),
-    repurchaseOfStock: numberOrNull(latestCf.repurchaseOfStock),
+    dividendPaid: numberOrNull(latestCf.netDividendsPaid ?? latestCf.commonDividendsPaid ?? latestCf.dividendsPaid),
+    repurchaseOfStock: numberOrNull(latestCf.netStockRepurchased ?? latestCf.commonStockRepurchased ?? latestCf.repurchaseOfStock),
     asOf: new Date().toISOString(),
     providerStatus: "ok"
   };
 }
 
 async function fetchFmpCompanyProfile(ticker) {
-  const apiKey = env("FMP_API_KEY");
-  if (!apiKey) throw new Error("missing FMP_API_KEY");
   const symbol = toFmpSymbol(ticker);
-
-  const profile = await fetchJson(`https://financialmodelingprep.com/api/v3/profile/${encodeURIComponent(symbol)}?apikey=${apiKey}`, { timeoutMs: 5000 });
+  const profile = await fmpGet("/stable/profile", { symbol }, { ttl: FMP_TTL.profile, timeoutMs: 5000 });
   if (!profile?.length) throw new Error("FMP 没有返回公司画像");
 
   const data = profile[0];
@@ -139,13 +135,10 @@ async function fetchFmpCompanyProfile(ticker) {
 }
 
 async function fetchFmpAnalystEstimates(ticker) {
-  const apiKey = env("FMP_API_KEY");
-  if (!apiKey) throw new Error("missing FMP_API_KEY");
   const symbol = toFmpSymbol(ticker);
-
   const [ratings, priceTarget] = await Promise.all([
-    fetchJson(`https://financialmodelingprep.com/api/v3/grade/${encodeURIComponent(symbol)}?limit=5&apikey=${apiKey}`, { timeoutMs: 5000 }),
-    fetchJson(`https://financialmodelingprep.com/api/v4/price-target-consensus?symbol=${encodeURIComponent(symbol)}&apikey=${apiKey}`, { timeoutMs: 5000 })
+    fmpGet("/stable/grades", { symbol, limit: 5 }, { ttl: FMP_TTL.estimates, timeoutMs: 5000 }),
+    fmpGet("/stable/price-target-consensus", { symbol }, { ttl: FMP_TTL.estimates, timeoutMs: 5000 })
   ]);
 
   const recentRatings = (ratings || []).slice(0, 5).map((r) => ({
@@ -172,12 +165,9 @@ async function fetchFmpAnalystEstimates(ticker) {
 }
 
 async function fetchFmpDividendHistory(ticker) {
-  const apiKey = env("FMP_API_KEY");
-  if (!apiKey) throw new Error("missing FMP_API_KEY");
   const symbol = toFmpSymbol(ticker);
-
-  const dividends = await fetchJson(`https://financialmodelingprep.com/api/v3/historical-price-full/stock_dividend/${encodeURIComponent(symbol)}?apikey=${apiKey}`, { timeoutMs: 5000 });
-  const historical = (dividends?.historical || []).slice(0, 8).map((d) => ({
+  const dividends = await fmpGet("/stable/dividends", { symbol, limit: 8 }, { ttl: FMP_TTL.dividends, timeoutMs: 5000 });
+  const historical = (Array.isArray(dividends) ? dividends : dividends?.historical || []).slice(0, 8).map((d) => ({
     date: d.date || "",
     dividend: numberOrNull(d.dividend),
     adjDividend: numberOrNull(d.adjDividend)
@@ -193,55 +183,125 @@ async function fetchFmpDividendHistory(ticker) {
   };
 }
 
+// ─── FMP 分部收入（产品/业务线，对标 HoneClaw 的分部数据） ────────────
+
+/**
+ * Normalize FMP revenue-segmentation into { period, total, segments[] } (pure).
+ * Tolerates both the newer flat shape ({ data: { seg: val } }) and the older
+ * nested shape ([{ "2024-09-28": { seg: val } }]).
+ */
+export function normalizeSegments(raw) {
+  const list = Array.isArray(raw) ? raw : [];
+  if (!list.length) return null;
+  const latest = list[0];
+  let period = "";
+  let data = null;
+  if (latest && typeof latest.data === "object" && latest.data) {
+    data = latest.data;
+    period = latest.date || (latest.fiscalYear ? `${latest.fiscalYear} ${latest.period || ""}`.trim() : "");
+  } else if (latest && typeof latest === "object") {
+    const key = Object.keys(latest).find((k) => latest[k] && typeof latest[k] === "object");
+    if (key) { data = latest[key]; period = key; }
+  }
+  if (!data) return null;
+  const entries = Object.entries(data)
+    .map(([name, value]) => ({ name, value: Number(value) }))
+    .filter((s) => Number.isFinite(s.value) && s.value !== 0);
+  if (!entries.length) return null;
+  const total = entries.reduce((sum, s) => sum + Math.abs(s.value), 0);
+  entries.sort((a, b) => b.value - a.value);
+  return {
+    period,
+    total,
+    segments: entries.slice(0, 8).map((s) => ({
+      name: s.name,
+      value: s.value,
+      pct: total ? Math.round((s.value / total) * 100) : null
+    }))
+  };
+}
+
+async function fetchFmpSegments(ticker) {
+  const symbol = toFmpSymbol(ticker);
+  const raw = await fmpGet(
+    "/stable/revenue-product-segmentation",
+    { symbol, period: "annual", structure: "flat" },
+    { ttl: FMP_TTL.financials, timeoutMs: 8000 }
+  );
+  const norm = normalizeSegments(raw);
+  if (!norm) throw new Error("FMP 没有返回分部收入");
+  return { source: "FMP", ticker: normalizeTicker(ticker), ...norm, providerStatus: "ok", asOf: new Date().toISOString() };
+}
+
+export async function getRevenueSegments(ticker) {
+  return tryProviders([() => fetchFmpSegments(ticker)]);
+}
+
 // ─── Finnhub (扩展已有 key) ──────────────────────────────────────────
 
+// Finnhub 基本面。关键点：/stock/metric 在免费档可用（含 PE/EPS/利润率/ROE/增长等
+// 比率），是这里的主数据源；/stock/financials（绝对额三表）是付费端点，取得到就补充、
+// 取不到也不影响——之前把两者放进同一个 Promise.all，付费端点 403 直接把整段拖垮，
+// 白白丢掉了免费就能拿到的 EPS/PE/利润率（这正是"美股没有估值条、置信度低"的根因）。
 async function fetchFinnhubFinancials(ticker) {
   const apiKey = env("FINNHUB_API_KEY");
   if (!apiKey) throw new Error("missing FINNHUB_API_KEY");
-  const symbol = `HK.${toHongKongSymbol(ticker)}`;
+  const symbol = finnhubSymbol(ticker);
 
-  const [financials, metrics] = await Promise.all([
-    fetchJson(`https://finnhub.io/api/v1/stock/financials?symbol=${encodeURIComponent(symbol)}&statement=ic&freq=annually&token=${apiKey}`, { timeoutMs: 6000 }),
-    fetchJson(`https://finnhub.io/api/v1/stock/metric?symbol=${encodeURIComponent(symbol)}&metric=all&token=${apiKey}`, { timeoutMs: 6000 })
-  ]);
+  const metrics = await fetchJson(
+    `https://finnhub.io/api/v1/stock/metric?symbol=${encodeURIComponent(symbol)}&metric=all&token=${apiKey}`,
+    { timeoutMs: 6000 }
+  );
+  const m = metrics?.metric || {};
+  if (!Object.keys(m).length) throw new Error("Finnhub 没有返回基础财务指标");
 
-  const annualData = financials?.financials?.[0];
-  const metricData = metrics?.metric || {};
-  const seriesData = metrics?.series?.annual || {};
+  // 付费端点：能拿到绝对额（营收/净利）就补充，拿不到就只用 metric 的比率。
+  let annual = null;
+  try {
+    const fin = await fetchJson(
+      `https://finnhub.io/api/v1/stock/financials?symbol=${encodeURIComponent(symbol)}&statement=ic&freq=annually&token=${apiKey}`,
+      { timeoutMs: 6000 }
+    );
+    annual = fin?.financials?.[0] || null;
+  } catch { /* 付费端点不可用：跳过绝对额 */ }
 
-  if (!annualData && !Object.keys(metricData).length) throw new Error("Finnhub 没有返回财务数据");
-
-  const revenue = numberOrNull(annualData?.revenue || metricData.revenueGrowth5Y ? null : null);
-  const netIncome = numberOrNull(annualData?.netIncome || null);
-  const grossMargin = numberOrNull(metricData.grossMargin || annualData?.grossMargin);
-  const operatingMargin = numberOrNull(metricData.operatingMargin || annualData?.operatingMargin);
-  const revenueGrowth = numberOrNull(metricData.revenueGrowthQ || metricData.revenueGrowthTTM || metricData["5YRevenueGrowthPerShare"]);
-  const profitGrowth = numberOrNull(metricData.netIncomeGrowth5Y || metricData.netMarginGrowth5Y);
+  const pick = (...vals) => {
+    for (const v of vals) {
+      const n = numberOrNull(v);
+      if (n !== null) return n;
+    }
+    return null;
+  };
 
   return {
     source: "Finnhub",
     ticker: normalizeTicker(ticker),
-    period: annualData?.period || "",
-    currency: "HKD",
-    revenue,
-    revenueGrowth,
-    grossMargin,
-    operatingMargin,
-    netIncome,
-    netMargin: numberOrNull(metricData.netMargin || annualData?.netMargin),
-    profitGrowth,
-    eps: numberOrNull(metricData.epsInclExtraItemsTTM || annualData?.eps),
-    freeCashFlow: numberOrNull(metricData.freeCashFlowPerShareTTM ? metricData.freeCashFlowPerShareTTM : null),
-    forwardPE: numberOrNull(metricData.forwardPE),
-    pe: numberOrNull(metricData.peNormalizedAnnual || metricData.peInclExtraTTM || metricData.peExclExtraTTM),
-    peRatio: numberOrNull(metricData.peRatio),
-    pegRatio: numberOrNull(metricData.pegRatio),
-    dividendYield: numberOrNull(metricData.dividendYieldIndicatedAnnual),
-    currentRatio: numberOrNull(metricData.currentRatio),
-    quickRatio: numberOrNull(metricData.quickRatio),
-    debtToEquity: numberOrNull(metricData.totalDebtToEquity || metricData.totalDebtToTotalAssets),
-    returnOnEquity: numberOrNull(metricData.roeTTM || metricData.returnOnEquity),
-    returnOnAssets: numberOrNull(metricData.roaTTM || metricData.returnOnAssets),
+    period: annual?.period || "TTM",
+    currency: detectMarket(ticker) === "US" ? "USD" : "HKD",
+    revenue: pick(annual?.revenue),
+    revenueGrowth: pick(m.revenueGrowthTTMYoy, m.revenueGrowthQuarterlyYoy, m.revenueGrowth5Y),
+    grossProfit: pick(annual?.grossIncome),
+    grossMargin: pick(m.grossMarginTTM, m.grossMarginAnnual, m.grossMargin5Y),
+    operatingIncome: pick(annual?.operatingIncome),
+    operatingMargin: pick(m.operatingMarginTTM, m.operatingMarginAnnual, m.operatingMargin5Y),
+    netIncome: pick(annual?.netIncome),
+    netMargin: pick(m.netProfitMarginTTM, m.netProfitMarginAnnual, m.netProfitMargin5Y),
+    profitGrowth: pick(m.epsGrowthTTMYoy, m.epsGrowth5Y, m.netMarginGrowth5Y),
+    eps: pick(m.epsTTM, m.epsInclExtraItemsTTM, m.epsAnnual),
+    pe: pick(m.peTTM, m.peInclExtraTTM, m.peNormalizedAnnual, m.peBasicExclExtraTTM),
+    forwardPE: pick(m.forwardPE),
+    ps: pick(m.psTTM, m.psAnnual),
+    pb: pick(m.pbQuarterly, m.pbAnnual, m.pb),
+    bookValuePerShare: pick(m.bookValuePerShareQuarterly, m.bookValuePerShareAnnual),
+    cashFlowPerShare: pick(m.cashFlowPerShareTTM, m.cashFlowPerShareAnnual),
+    dividendYield: pick(m.currentDividendYieldTTM, m.dividendYieldIndicatedAnnual),
+    currentRatio: pick(m.currentRatioQuarterly, m.currentRatioAnnual),
+    debtToEquity: pick(m["totalDebt/totalEquityQuarterly"], m["totalDebt/totalEquityAnnual"], m["longTermDebt/equityQuarterly"]),
+    returnOnEquity: pick(m.roeTTM, m.roeRfy, m.roe5Y),
+    returnOnAssets: pick(m.roaTTM, m.roaRfy, m.roa5Y),
+    beta: pick(m.beta),
+    week52High: pick(m["52WeekHigh"]),
+    week52Low: pick(m["52WeekLow"]),
     asOf: new Date().toISOString(),
     providerStatus: "ok"
   };
@@ -250,7 +310,7 @@ async function fetchFinnhubFinancials(ticker) {
 async function fetchFinnhubRecommendation(ticker) {
   const apiKey = env("FINNHUB_API_KEY");
   if (!apiKey) throw new Error("missing FINNHUB_API_KEY");
-  const symbol = `HK.${toHongKongSymbol(ticker)}`;
+  const symbol = finnhubSymbol(ticker);
 
   const data = await fetchJson(`https://finnhub.io/api/v1/stock/recommendation?symbol=${encodeURIComponent(symbol)}&token=${apiKey}`, { timeoutMs: 5000 });
   if (!data?.length) throw new Error("Finnhub 没有返回分析师推荐");
@@ -317,6 +377,21 @@ async function fetchYahooStatistics(ticker) {
     targetHighPrice: numberOrNull(financial.targetHighPrice?.raw),
     targetLowPrice: numberOrNull(financial.targetLowPrice?.raw),
     recommendation: financial.recommendationKey || "",
+    // Canonical field names so downstream (financialQuality / financialsToMarkdown /
+    // valuation) can actually read Yahoo data when FMP is rate-limited/unavailable.
+    // Without these the Yahoo fallback returned providerStatus:"ok" but all-null,
+    // which surfaced as "基本面未核到 + 无估值条".
+    period: "TTM",
+    revenue: numberOrNull(financial.totalRevenue?.raw),
+    grossProfit: numberOrNull(financial.grossProfits?.raw),
+    grossMargin: numberOrNull(financial.grossMargins?.raw != null ? financial.grossMargins.raw * 100 : null),
+    operatingMargin: numberOrNull(financial.operatingMargins?.raw != null ? financial.operatingMargins.raw * 100 : null),
+    netMargin: numberOrNull(financial.profitMargins?.raw != null ? financial.profitMargins.raw * 100 : null),
+    eps: numberOrNull(stats.trailingEps?.raw ?? currentEstimate?.epsTrend?.current ?? stats.forwardEps?.raw),
+    freeCashFlow: numberOrNull(financial.freeCashflow?.raw),
+    operatingCashFlow: numberOrNull(financial.operatingCashflow?.raw),
+    cashAndEquivalents: numberOrNull(financial.totalCash?.raw),
+    pe: numberOrNull(stats.trailingPE?.raw),
     asOf: new Date().toISOString(),
     providerStatus: "ok"
   };
@@ -477,11 +552,45 @@ export async function getCompanyProfile(ticker) {
   ]);
 }
 
+// 仅取一致目标价（quoteSummary/financialData）。Yahoo 偶尔反爬 403，所以只当"尽力
+// 而为"的补充：买卖分布走 Finnhub（稳定），目标价能从 Yahoo 拿到就叠加，拿不到不报错。
+async function fetchYahooPriceTarget(ticker) {
+  const symbol = normalizeTicker(ticker);
+  const data = await fetchJson(
+    `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${encodeURIComponent(symbol)}?modules=financialData`,
+    { timeoutMs: 6000 }
+  );
+  const fin = data.quoteSummary?.result?.[0]?.financialData || {};
+  const mean = numberOrNull(fin.targetMeanPrice?.raw);
+  if (!mean) throw new Error("Yahoo 没有返回一致目标价");
+  return {
+    consensusTargetPrice: mean,
+    targetHigh: numberOrNull(fin.targetHighPrice?.raw),
+    targetLow: numberOrNull(fin.targetLowPrice?.raw),
+    targetMedian: numberOrNull(fin.targetMedianPrice?.raw),
+    numberOfAnalysts: numberOrNull(fin.numberOfAnalystOpinions?.raw)
+  };
+}
+
 export async function getAnalystEstimates(ticker) {
-  return tryProviders([
+  // 分布/共识：FMP grades（常 gated）→ Finnhub recommendation（免费稳定）。
+  const base = await tryProviders([
     () => fetchFmpAnalystEstimates(ticker),
     () => fetchFinnhubRecommendation(ticker)
   ]);
+  // 目标价：base 没带（Finnhub 不含目标价）时用 Yahoo 兜底，叠加到分布上。
+  if (numberOrNull(base.consensusTargetPrice) === null) {
+    try {
+      const target = await fetchYahooPriceTarget(ticker);
+      const had = base.providerStatus === "ok";
+      Object.assign(base, target, {
+        providerStatus: "ok",
+        source: had ? `${base.source} + Yahoo 目标价` : "Yahoo 目标价",
+        asOf: new Date().toISOString()
+      });
+    } catch { /* 目标价拿不到：只用买卖分布即可 */ }
+  }
+  return base;
 }
 
 export async function getDividendHistory(ticker) {
@@ -502,6 +611,12 @@ export function financialsToMarkdown(financials) {
   const fmtCompact = (value) => (value !== null && value !== undefined ? compactNumber(value) : "缺失");
   const period = financials.period ? `（${financials.period}）` : "";
 
+  const seg = financials.segments?.segments?.length
+    ? `\n分部收入（${financials.segments.period || "最新期"}，来源 ${financials.segments.source || "FMP"}）：\n${financials.segments.segments
+        .map((s) => `- ${s.name}：${compactNumber(s.value)}${s.pct != null ? `（占 ${s.pct}%）` : ""}`)
+        .join("\n")}`
+    : "";
+
   return [
     `财务数据来源：${financials.source}${period}`,
     `收入：${fmtCompact(financials.revenue)} | 增速：${fmt(financials.revenueGrowth, "%")}`,
@@ -521,7 +636,7 @@ export function financialsToMarkdown(financials) {
     financials.debtToEquity ? `资产负债率：${financials.debtToEquity}` : "",
     financials.returnOnEquity ? `ROE：${fmtPercent(financials.returnOnEquity)}` : "",
     financials.returnOnAssets ? `ROA：${fmtPercent(financials.returnOnAssets)}` : ""
-  ].filter(Boolean).join("\n");
+  ].filter(Boolean).join("\n") + seg;
 }
 
 export function companyProfileToMarkdown(profile) {

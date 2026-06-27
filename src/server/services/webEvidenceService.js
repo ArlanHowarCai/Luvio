@@ -45,6 +45,7 @@ const INTENT_SIGNAL_WORDS = {
   financial_quality: /收入|利润|毛利|现金流|财报|业绩|revenue|profit|margin|cash flow|earnings/i,
   valuation: /估值|市盈率|目标价|回购|分红|PE|valuation|target price|buyback|dividend/i,
   risk_event: /下跌|上涨|监管|风险|处罚|竞争|股价|fall|rise|risk|regulation|probe|competition/i,
+  falsify: /风险|证伪|看空|监管|下滑|放缓|利润率|竞争|risk|bear|decline|slowing|margin|regulation|competition/i,
   company_status: /业绩|财报|股价|新闻|展望|earnings|results|stock|outlook|news/i
 };
 
@@ -170,12 +171,95 @@ function normalizeEvidence(raw = {}, context = {}) {
   return item;
 }
 
+// Junk domains that should never be cited (portals, login walls, generic homepages).
+const JUNK_HOSTS = [
+  "qq.com",
+  "baidu.com",
+  "google.com",
+  "bing.com",
+  "duckduckgo.com",
+  "yahoo.com",
+  "so.com",
+  "sogou.com",
+  "163.com",
+  "sina.com.cn"
+];
+
+/** Cheap (no-network) reject: homepages, search engines, bare portals. */
+function isJunkUrl(url = "") {
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return true;
+  }
+  const host = parsed.hostname.replace(/^www\./, "").toLowerCase();
+  const path = parsed.pathname.replace(/\/+$/, "");
+  // No real path → homepage/portal (e.g. https://www.qq.com/). Allow only trusted hosts with real content.
+  if (!path || path === "" || path === "/") {
+    return !TRUSTED_HOSTS.some((trusted) => host.includes(trusted));
+  }
+  if (JUNK_HOSTS.some((junk) => host === junk || host.endsWith(`.${junk}`))) {
+    // A portal subpage is sometimes a real article; keep only if the path is deep enough.
+    return path.split("/").filter(Boolean).length < 2;
+  }
+  return false;
+}
+
 function isUsefulEvidence(item = {}, intent = "") {
   const text = `${item.title || ""} ${item.snippet || ""} ${item.url || ""}`;
   if (LOW_QUALITY_TEXT.test(text)) return false;
+  if (isJunkUrl(item.url || "")) return false;
   const signal = INTENT_SIGNAL_WORDS[intent] || INTENT_SIGNAL_WORDS.company_status;
   if (item.sourceType === "official" || item.sourceType === "industry_research" || item.sourceType === "financial_media") return true;
   return signal.test(text);
+}
+
+/**
+ * Verify candidate URLs actually resolve. Drops 404 / 410 / dead links so the
+ * user never sees a source that returns "not found". Tolerant of bot-blocking:
+ * only an explicit not-found / DNS failure / timeout removes an item.
+ */
+async function keepLiveEvidence(items = [], { limit = 6, timeoutMs = 3500 } = {}) {
+  const checks = await Promise.all(
+    items.slice(0, limit).map(async (item) => {
+      const ok = await urlIsAlive(item.url, timeoutMs);
+      return ok ? item : null;
+    })
+  );
+  return checks.filter(Boolean);
+}
+
+async function urlIsAlive(url = "", timeoutMs = 3500) {
+  if (!/^https?:\/\//i.test(url)) return false;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    let res = await fetch(url, {
+      method: "HEAD",
+      redirect: "follow",
+      signal: controller.signal,
+      headers: { "User-Agent": "Mozilla/5.0 LuvioResearch/0.1" }
+    });
+    // Some hosts reject HEAD (405/501) — retry a lightweight ranged GET.
+    if (res.status === 405 || res.status === 501) {
+      res = await fetch(url, {
+        method: "GET",
+        redirect: "follow",
+        signal: controller.signal,
+        headers: { "User-Agent": "Mozilla/5.0 LuvioResearch/0.1", Range: "bytes=0-2048" }
+      });
+    }
+    // Only an explicit "gone" status removes a link. 403/429/5xx (bot-blocking,
+    // rate limits) are kept — they don't mean the user's browser will 404.
+    return ![404, 410].includes(res.status);
+  } catch {
+    // Network error / timeout from our server ≠ dead for the user. Keep it;
+    // junk homepages are already removed by isJunkUrl without a request.
+    return true;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function dedupe(items = []) {
@@ -265,10 +349,49 @@ async function searchBingWeb(query) {
   return parseBingHtml(html, query);
 }
 
+function decodeDuckUrl(href = "") {
+  try {
+    if (/[?&]uddg=/.test(href)) {
+      const u = new URL(href, "https://duckduckgo.com");
+      const target = u.searchParams.get("uddg");
+      if (target) return decodeURIComponent(target);
+    }
+  } catch {
+    /* fall through */
+  }
+  return href;
+}
+
+function parseDuckHtml(html, query) {
+  const blocks = [...String(html).matchAll(/<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi)].slice(0, 6);
+  const snippets = [...String(html).matchAll(/<a[^>]+class="result__snippet"[^>]*>([\s\S]*?)<\/a>/gi)].map((m) => decodeXml(m[1]));
+  return blocks
+    .map(([, href, title], index) => {
+      const url = decodeDuckUrl(href);
+      if (!/^https?:\/\//i.test(url)) return null;
+      return {
+        title: decodeXml(title),
+        url,
+        snippet: snippets[index] || "",
+        source: hostOf(url) || "DuckDuckGo",
+        publishedAt: "",
+        query
+      };
+    })
+    .filter(Boolean);
+}
+
+async function searchDuckDuckGo(query) {
+  const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}&kl=wt-wt`;
+  const html = await fetchWithTimeout(url, {}, 7000);
+  return parseDuckHtml(html, query);
+}
+
 async function searchOneQuery(query) {
   const jobs = [
     searchTavily(query),
     searchSerpApi(query),
+    searchDuckDuckGo(query),
     searchYahooNews(query),
     searchBingWeb(query)
   ];
@@ -280,6 +403,61 @@ async function searchOneQuery(query) {
     else errors.push(item.reason?.message || "search failed");
   }
   return { results, errors };
+}
+
+// Phrase-level boilerplate so single words inside real prose (e.g. 广告业务) survive.
+const BOILERPLATE = /subscribe to|sign in|sign up|newsletter|cookie policy|advertisement|all rights reserved|版权所有|免责声明|关注我们|扫码关注|下载\s*app|相关阅读|登录\s*\/?\s*注册|点击.{0,4}订阅/i;
+
+function metaContent(html, name) {
+  const re = new RegExp(`<meta[^>]+(?:property|name)=["']${name}["'][^>]*content=["']([^"']+)["']`, "i");
+  const m = String(html).match(re);
+  return m ? decodeXml(m[1]).trim() : "";
+}
+
+/**
+ * Readability-lite v2: extract the main article body from raw HTML.
+ * Strategy: drop chrome/boilerplate, score <p> blocks by length, and lead with
+ * the page's own meta/og description so even thin pages yield a usable excerpt.
+ */
+export function extractMainText(html = "") {
+  const lead = metaContent(html, "og:description") || metaContent(html, "description");
+  const body = String(html)
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<noscript[\s\S]*?<\/noscript>/gi, " ")
+    .replace(/<(nav|header|footer|aside|form|figure)[\s\S]*?<\/\1>/gi, " ");
+  const paras = [...body.matchAll(/<(?:p|article|h2|h3|li)[^>]*>([\s\S]*?)<\/(?:p|article|h2|h3|li)>/gi)]
+    .map((m) => decodeXml(m[1]).replace(/\s+/g, " ").trim())
+    .filter((t) => t.length >= 40 && !BOILERPLATE.test(t));
+  const parts = [];
+  const seen = new Set();
+  if (lead && lead.length >= 12) parts.push(lead);
+  for (const p of paras) {
+    const key = p.slice(0, 60);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    parts.push(p);
+    if (parts.join(" ").length > 800) break;
+  }
+  const text = (parts.length ? parts.join(" ") : decodeXml(body).replace(/\s+/g, " ").trim());
+  return text.slice(0, 800);
+}
+
+/** Best-effort: fetch the top evidence pages and attach an extracted excerpt. */
+async function enrichWithExcerpts(items = [], { limit = 3, timeoutMs = 4000 } = {}) {
+  await Promise.all(
+    items.slice(0, limit).map(async (item) => {
+      if (item.excerpt) return;
+      try {
+        const html = await fetchWithTimeout(item.url, {}, timeoutMs);
+        const excerpt = extractMainText(html);
+        if (excerpt && excerpt.length > (item.snippet || "").length) item.excerpt = excerpt;
+      } catch {
+        /* best-effort — snippet stays as-is */
+      }
+    })
+  );
+  return items;
 }
 
 export async function researchWebEvidence({ company, question = "", intent = classifyResearchIntent(question), maxAgeHours = 24, forceRefresh = false } = {}) {
@@ -318,19 +496,23 @@ export async function researchWebEvidence({ company, question = "", intent = cla
     }
   }
 
-  const evidence = dedupe(all)
+  const ranked = dedupe(all)
     .map((item) => normalizeEvidence(item, { company, question, intent, ticker: company.ticker, query: item.query }))
     .filter(Boolean)
     .filter((item) => isUsefulEvidence(item, intent))
     .filter((item) => item.credibilityScore >= 0.25 && item.relevanceScore >= 0.25)
     .sort((a, b) => (b.credibilityScore + b.relevanceScore) - (a.credibilityScore + a.relevanceScore))
-    .slice(0, 10);
+    .slice(0, 8);
+
+  // Only keep links that actually resolve — the user must never click a 404.
+  const evidence = await keepLiveEvidence(ranked, { limit: 8 });
+  // Pull main-body text for the top few so the model can quote real content.
+  await enrichWithExcerpts(evidence, { limit: 3 });
 
   saveWebEvidence(evidence);
 
   const gaps = [];
-  if (!evidence.length) gaps.push("本轮没有抓到可用公开网页证据，需要配置 Tavily / SerpAPI 或稍后重试公开搜索。");
-  if (!process.env.TAVILY_API_KEY && !process.env.SERPAPI_API_KEY) gaps.push("当前未配置专业搜索 API，只能使用 Yahoo/Bing 公开兜底，稳定性和覆盖度有限。");
+  if (!evidence.length) gaps.push("本轮没有抓到可校验的公开网页证据，已改用公司档案与已接入数据做判断。");
   if (errors.length) gaps.push(`部分搜索源失败：${[...new Set(errors)].slice(0, 3).join("；")}`);
 
   return {
@@ -349,8 +531,9 @@ export function webEvidenceToPrompt(webEvidence = {}) {
   if (!evidence.length) return "Web Evidence：本轮未抓到可用公开网页证据。";
   const lines = evidence.slice(0, 8).map((item, index) => {
     const date = item.publishedAt ? `，${item.publishedAt}` : "";
-    const snippet = item.snippet ? `：${item.snippet.slice(0, 180)}` : "";
-    return `${index + 1}. ${item.title || item.url}（${item.source || item.sourceType}${date}）${snippet}\n   链接：${item.url}`;
+    const body = (item.excerpt || item.snippet || "").slice(0, 220);
+    const text = body ? `：${body}` : "";
+    return `${index + 1}. ${item.title || item.url}（${item.source || item.sourceType}${date}）${text}\n   链接：${item.url}`;
   });
   return `Web Evidence（${webEvidence.provider || "web"}，${webEvidence.summary || ""}）：\n${lines.join("\n")}`;
 }

@@ -16,6 +16,18 @@
 https://github.com/ArlanHowarCai/Luvio.git
 ```
 
+## 当前进度（2026-06）
+
+重构 + 港美股全球化的全部工作在分支 **`cleanup/pristine-refactor`**（多个提交）。在沙箱/CI 环境里 `git push` 因无凭据失败，需要在**本机终端**推送：
+
+```bash
+cd "/Users/arlan/Vibe Coding/LUVIO"
+git push -u origin cleanup/pristine-refactor
+# 然后在 GitHub 上对 main 开 PR（PR 描述见 docs 或 PR_DESCRIPTION.md）
+```
+
+`.env`（含 FMP / Tavily 等真实 key）已 gitignore，永远不会被推送。
+
 查看状态：
 
 ```bash

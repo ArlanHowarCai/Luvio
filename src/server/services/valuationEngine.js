@@ -29,6 +29,93 @@ import { compactNumberServer } from "../utils/format.js";
  * @param {string} opts.sector       — sector for PE reference
  * @returns {{ method, bear, base, bull, keyAssumptions, sensitivity, cannotValueReason }}
  */
+/**
+ * Display-safe valuation: runs computeValuation, but if its range is incoherent
+ * with the live price (cross-source EPS/currency mismatches can put the price
+ * outside bear..bull), falls back to a self-consistent PE dispersion band so the
+ * visualization is never misleading. Returns cannotValueReason when even a band
+ * can't be built.
+ */
+export function displayValuation(company, marketSnapshot, financialsData, estimates = null) {
+  const v = computeValuation(company, marketSnapshot, financialsData);
+  const price = parseFloat(v.currentPrice);
+  // Analyst consensus is attached as an independent anchor whenever available —
+  // it enriches even a coherent fundamental band (US gets real targets via FMP).
+  const analyst = analystAnchor(estimates, price);
+  const bear = parseFloat(v.bear);
+  const bull = parseFloat(v.bull);
+  const coherent =
+    !v.cannotValueReason &&
+    [bear, bull, price].every((n) => Number.isFinite(n)) &&
+    bear > 0 &&
+    bear < price &&
+    price < bull;
+  if (coherent) return analyst ? { ...v, analyst } : v;
+
+  const p = numOrNull(marketSnapshot?.price ?? company?.price);
+  const lo = numOrNull(estimates?.targetLow);
+  const hi = numOrNull(estimates?.targetHigh);
+  const mid = numOrNull(estimates?.consensusTargetPrice) ?? numOrNull(estimates?.targetMedian);
+  const midRef = mid ?? (lo && hi ? (lo + hi) / 2 : null);
+  // An analyst band is only trustworthy when its center sits in a plausible range
+  // of the live price — guards against stale/unadjusted targets (e.g. NVDA consensus
+  // 500 vs price 202, which would render a misleading "中性 500 / +147%" band).
+  const analystBandOk = p && lo && hi && lo < hi && midRef && midRef >= p * 0.5 && midRef <= p * 1.8;
+  if (analystBandOk) {
+    // Bracket the current price so the bar stays coherent even when targets cluster above it.
+    const bearV = Math.min(lo, p * 0.95);
+    const bullV = Math.max(hi, p * 1.05);
+    const baseV = mid && mid > bearV && mid < bullV ? mid : p;
+    return {
+      method: "分析师目标价区间",
+      bear: bearV.toFixed(2),
+      base: baseV.toFixed(2),
+      bull: bullV.toFixed(2),
+      currentPrice: p,
+      methods: ["分析师目标价区间"],
+      keyAssumptions: [`基于分析师一致目标价：低 ${lo} / 中 ${mid ?? "—"} / 高 ${hi}（来源 ${estimates.source || "评级源"}）`],
+      sensitivity: [],
+      analyst,
+      cannotValueReason: null
+    };
+  }
+
+  // Price-centered PE band from a quoted or EPS-derived PE — always coherent. This is
+  // the guaranteed fallback so a bar renders whenever we have a price + real EPS, even
+  // for growth names where FCF-yield is incoherent and analyst targets aren't trustworthy.
+  let pe = marketSnapshot?.pe ?? company?.pe;
+  if (!pe && financialsData?.eps && p) pe = p / financialsData.eps;
+  if (p && pe) {
+    return {
+      method: "PE 区间",
+      bear: (p * 0.78).toFixed(2),
+      base: p.toFixed(2),
+      bull: (p * 1.28).toFixed(2),
+      currentPrice: p,
+      methods: ["PE 区间"],
+      keyAssumptions: [`基于现价与 PE ${Number(pe).toFixed(1)}x 的估值带（约 ±25%，反映 PE 收缩/扩张）`],
+      sensitivity: [],
+      analyst,
+      cannotValueReason: null
+    };
+  }
+  return { ...v, analyst, cannotValueReason: v.cannotValueReason || "缺少自洽的估值口径。" };
+}
+
+function numOrNull(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+/** Distill analyst consensus into a compact anchor with upside-to-target. */
+function analystAnchor(estimates, price) {
+  if (!estimates || estimates.providerStatus !== "ok") return null;
+  const target = numOrNull(estimates.consensusTargetPrice) ?? numOrNull(estimates.targetMedian);
+  if (!target) return null;
+  const upside = Number.isFinite(price) && price > 0 ? `${((target - price) / price * 100).toFixed(1)}%` : null;
+  return { target, low: numOrNull(estimates.targetLow), high: numOrNull(estimates.targetHigh), upside, source: estimates.source || "评级源" };
+}
+
 export function computeValuation(company, marketSnapshot, financialsData) {
   if (!company || !marketSnapshot) {
     return {

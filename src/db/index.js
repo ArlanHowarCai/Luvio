@@ -10,13 +10,19 @@ import { fileURLToPath } from "node:url";
 import { existsSync } from "node:fs";
 
 const root = dirname(fileURLToPath(import.meta.url));
-const DB_PATH = join(root, "..", "..", "luvio.db");
+const DEFAULT_DB_PATH = join(root, "..", "..", "luvio.db");
 
 let db = null;
 
+// Resolved lazily (inside getDb) so tests can point LUVIO_DB_PATH at a temp file
+// before the first connection — keeps the test suite from polluting the dev DB.
+export function dbPath() {
+  return process.env.LUVIO_DB_PATH || DEFAULT_DB_PATH;
+}
+
 export function getDb() {
   if (!db) {
-    db = new Database(DB_PATH);
+    db = new Database(dbPath());
     db.pragma("journal_mode = WAL");
     db.pragma("foreign_keys = ON");
     initSchema(db);
