@@ -157,6 +157,28 @@ function resolveUsTicker(text = "") {
   return null;
 }
 
+// 知名"未上市"私人公司。问到时明确说"研究不了"，而不是被裸大写词启发式错认成某个
+// 同名 ticker —— "Space X" 被大写成 "SPACE X" 后会被抓成代码 SPACE（一只壳/ETF），
+// 这正是截图里"SPACE SPACE"张冠李戴的根因。若其中某家已 IPO，引导用户给新代码。
+const PRIVATE_COMPANIES = /space\s*x|spacex|太空探索技术|马斯克的?(航天|火箭|太空)|\bopenai\b|open\s?ai|anthropic|字节跳动|bytedance|抖音|\btiktok\b|stripe|shein|希音|databricks|\bx\.ai\b/i;
+
+function privateCompanyName(query = "") {
+  const q = String(query);
+  if (/space\s*x|spacex|太空探索技术|马斯克的?(航天|火箭|太空)/i.test(q)) return "SpaceX";
+  if (/\bopenai\b|open\s?ai/i.test(q)) return "OpenAI";
+  if (/anthropic/i.test(q)) return "Anthropic";
+  if (/字节跳动|bytedance|抖音|\btiktok\b/i.test(q)) return "字节跳动 ByteDance";
+  if (/stripe/i.test(q)) return "Stripe";
+  if (/shein|希音/i.test(q)) return "SHEIN";
+  if (/databricks/i.test(q)) return "Databricks";
+  if (/\bx\.ai\b/i.test(q)) return "xAI";
+  return companyNameResidual(q) || q.trim();
+}
+
+function mentionsPrivateCompany(query = "") {
+  return PRIVATE_COMPANIES.test(String(query));
+}
+
 let apiStatus = null;
 let isBusy = false;
 let busyStartedAt = 0;
@@ -555,6 +577,9 @@ function companySearchCandidates(query = "") {
 }
 
 async function resolveCompany(query) {
+  // 未上市私人公司（SpaceX / OpenAI / 字节跳动…）：明确返回 unlisted，绝不让裸大写词
+  // 启发式错认成同名 ticker（"Space X" → "SPACE" 那种张冠李戴）。
+  if (mentionsPrivateCompany(query)) return { unlisted: true, name: privateCompanyName(query) };
   // 双重上市优先：阿里巴巴 / 京东等统一走美股 ADR 口径，附带两地代码。
   const dual = resolveDualListing(query);
   if (dual) return dual;
@@ -917,6 +942,16 @@ async function sendChat(question) {
         "assistant",
         `「${resolved.name}」是 A 股（沪深）。Luvio 目前只覆盖**港股和美股**，这家暂时研究不了。\n\n` +
         `如果它同时在港股或美股上市（很多中概股是双重上市），可以用对应代码再问我，比如港股 **xxxx.HK** 或美股代码。`
+      );
+      return;
+    }
+    // 未上市私人公司：明确说研究不了，并把"如果已上市/你指的是别的标的"的出口留给用户，
+    // 而不是错认成同名 ticker（截图里 SpaceX → "SPACE" 那种）。
+    if (resolved?.unlisted) {
+      appendMessage(
+        "assistant",
+        `「${resolved.name}」是**未公开上市**的私人公司，没有公开股价、市值或财报。Luvio 目前只覆盖**港股和美股的上市公司**，这家暂时研究不了。\n\n` +
+        `如果它**已经 IPO**，或你其实想问某只**已上市**的相关标的（比如航天主题 ETF、供应链上市公司），把股票代码发我（如 **$RKLB**、**$ASTS**、**$ARKX**），我就能拉真数据来研究。`
       );
       return;
     }
